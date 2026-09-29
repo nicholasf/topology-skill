@@ -36,6 +36,6 @@ Playbooks are TOML configs that match a specific node in the topology. Right now
 * Sidecar files — dependent skills store their own data in `topology-{skill-name}.toml`, alongside `topology.toml`
 * Playbook composition — a playbook task can `ref` another playbook instead of duplicating tasks per node
 * Variables — `${VAR}` placeholders in a task's command, filled with `--var KEY=VALUE`
-* Secrets — kept in `$SKILLS_HOME/.env`, never in a topology file
+* Secrets — kept in `$SKILLS_HOME/.env` (see [manage-skills-skill](https://github.com/nicholasf/manage-skills-skill)), never in a topology file
 * Privacy — keep `$TOPOLOGIES_HOME` private if it's a git repo; it's a recon map of your network
 * Future — flat TOML files are a stopgap; `schema_version` exists for an eventual SQLite migration
