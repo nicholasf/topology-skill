@@ -24,8 +24,19 @@ def _format_value(value) -> str:
         return str(value)
     if isinstance(value, list):
         return '[' + ', '.join(_format_value(v) for v in value) + ']'
-    escaped = str(value).replace('\\', '\\\\').replace('"', '\\"')
-    return f'"{escaped}"'
+    return '"' + ''.join(_escape_character(c) for c in str(value)) + '"'
+
+
+_ESCAPES = {'\\': '\\\\', '"': '\\"', '\n': '\\n', '\r': '\\r', '\t': '\\t', '\b': '\\b', '\f': '\\f'}
+
+
+def _escape_character(character: str) -> str:
+    """Escape one character for a TOML basic string; control characters become \\uXXXX."""
+    if character in _ESCAPES:
+        return _ESCAPES[character]
+    if ord(character) < 0x20 or ord(character) == 0x7F:
+        return f'\\u{ord(character):04x}'
+    return character
 
 
 def write_toml(data: dict, path: str) -> None:

@@ -1,3 +1,6 @@
+import datetime
+import os
+import tomllib
 from unittest.mock import patch
 
 import pytest
@@ -18,6 +21,9 @@ from topology.playbook import (
     print_list,
     resolve_alias,
     resolve_remote_host,
+    run_captured,
+    safe_file_name,
+    write_failure_report,
 )
 
 
@@ -239,8 +245,19 @@ def _task(hosts='localhost', oversight=False, ssh_host=None, ssh_user=None, comm
 
 
 class _Result:
-    def __init__(self, returncode):
+    def __init__(self, returncode, stdout='', stderr=''):
         self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+@pytest.fixture(autouse=True)
+def isolated_topologies_home(tmp_path, monkeypatch):
+    """Failure reports go under $TOPOLOGIES_HOME; never let tests write to the real one."""
+    home = tmp_path / 'topologies_home'
+    home.mkdir()
+    monkeypatch.setenv('TOPOLOGIES_HOME', str(home))
+    return home
 
 
 def test_execute_runs_local_when_ssh_host_none():
@@ -300,6 +317,96 @@ def test_execute_fails_fast_on_nonzero_exit():
     with patch('topology.playbook.run_local', side_effect=[_Result(1), _Result(0)]) as run_local:
         assert execute([failing, unreached]) == 1
         run_local.assert_called_once()
+
+
+# ── failure reports ────────────────────────────────────────────────────────────
+
+NOW = datetime.datetime(2026, 10, 17, 9, 30, 15)
+
+
+def _reports(home):
+    directory = home / 'error-reports'
+    return sorted(p for p in directory.iterdir()) if directory.exists() else []
+
+
+def test_failed_task_writes_report_with_all_fields(isolated_topologies_home):
+    task = {**_task(command='false'), 'name': 'restore database', 'hosts': 'seagull'}
+    result = _Result(3, stdout='partial\nout', stderr='boom "quoted"\n')
+    task = {**task, 'ssh_host': 'seagull', 'ssh_user': 'nicholasf'}
+    with patch('topology.playbook.run_remote', return_value=result):
+        assert execute([task], playbook_name='update-seagull-database') == 3
+
+    [report_path] = _reports(isolated_topologies_home)
+    assert report_path.name.startswith('restore-database-')
+    report = tomllib.loads(report_path.read_text())
+    assert report['playbook'] == 'update-seagull-database'
+    assert report['task'] == 'restore database'
+    assert report['hosts'] == 'seagull'
+    assert report['command'] == 'false'
+    assert report['exit_code'] == 3
+    assert report['stdout'] == 'partial\nout'
+    assert report['stderr'] == 'boom "quoted"\n'
+    assert report_path.name == f'restore-database-{report["timestamp"]}.toml'
+
+
+def test_successful_task_writes_no_report(isolated_topologies_home):
+    with patch('topology.playbook.run_local', return_value=_Result(0)):
+        assert execute([_task()]) == 0
+    assert _reports(isolated_topologies_home) == []
+
+
+def test_report_file_name_uses_timestamp_format(isolated_topologies_home):
+    path = write_failure_report(_task(command='echo hi'), _Result(1), 'pb', now=NOW)
+    assert os.path.basename(path) == 'echo-hi-2026-10-17T09-30-15.toml'
+
+
+def test_report_creates_directory_when_missing(isolated_topologies_home):
+    assert not (isolated_topologies_home / 'error-reports').exists()
+    assert write_failure_report(_task(), _Result(1), 'pb', now=NOW) is not None
+    assert (isolated_topologies_home / 'error-reports').is_dir()
+
+
+def test_report_name_collision_adds_counter_and_never_overwrites(isolated_topologies_home):
+    first = write_failure_report(_task(), _Result(1, stdout='first'), 'pb', now=NOW)
+    second = write_failure_report(_task(), _Result(2, stdout='second'), 'pb', now=NOW)
+    third = write_failure_report(_task(), _Result(3, stdout='third'), 'pb', now=NOW)
+    assert len({first, second, third}) == 3
+    assert tomllib.loads(open(first).read())['stdout'] == 'first'
+    assert os.path.basename(second).endswith('-1.toml')
+    assert os.path.basename(third).endswith('-2.toml')
+
+
+def test_report_leaves_no_temporary_files(isolated_topologies_home):
+    write_failure_report(_task(), _Result(1), 'pb', now=NOW)
+    names = [p.name for p in _reports(isolated_topologies_home)]
+    assert not any(n.endswith('.tmp') for n in names)
+
+
+def test_report_write_failure_keeps_exit_code_and_reports_to_stderr(isolated_topologies_home, capsys):
+    (isolated_topologies_home / 'error-reports').write_text('a file where the directory should be')
+    with patch('topology.playbook.run_local', return_value=_Result(7)):
+        assert execute([_task(command='false')]) == 7
+    assert 'Could not write failure report' in capsys.readouterr().err
+
+
+def test_unnamed_task_report_uses_first_command_line(isolated_topologies_home):
+    task = _task(command='\n  systemctl restart thing\nsecond line')
+    path = write_failure_report(task, _Result(1), 'pb', now=NOW)
+    assert os.path.basename(path).startswith('systemctl-restart-thing-')
+    assert tomllib.loads(open(path).read())['task'] == 'systemctl restart thing'
+
+
+def test_safe_file_name_falls_back_when_nothing_usable():
+    assert safe_file_name('///') == 'task'
+    assert '/' not in safe_file_name('a/b c')
+
+
+def test_run_captured_records_and_echoes_both_streams(capsys):
+    result = run_captured(['bash', '-c', 'echo out; echo err >&2; exit 4'])
+    captured = capsys.readouterr()
+    assert (result.returncode, result.stdout, result.stderr) == (4, 'out\n', 'err\n')
+    assert captured.out == 'out\n'
+    assert captured.err == 'err\n'
 
 
 # ── playbook list ──────────────────────────────────────────────────────────────
