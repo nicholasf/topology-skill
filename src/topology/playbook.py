@@ -29,17 +29,20 @@ Y/N sign-off ("oversight") — set explicitly by the author or detected by a
 keyword heuristic; explicit authoring always wins over the heuristic.
 """
 
+import datetime
 import difflib
 import glob
 import os
 import re
 import subprocess
 import sys
+import tempfile
+import threading
 import tomllib
 
 from .discover import AGENT_SSH_USER
 from .sync import get_topology_path
-from .toml_io import read_toml
+from .toml_io import read_toml, write_toml
 
 HEURISTIC_OVERSIGHT_PATTERNS = ['restart', 'kill', 'stop', 'rm ', 'rm\t', 'drop', 'wipe']
 VAR_PATTERN = re.compile(r'\$\{(\w+)(?::-([^}]*))?\}')
@@ -267,14 +270,38 @@ def confirm(prompt: str) -> bool:
     return input(f'{prompt} [y/N] ').strip().lower() in ('y', 'yes')
 
 
-def run_local(command: str) -> subprocess.CompletedProcess:
+def run_captured(args: list[str]) -> subprocess.CompletedProcess:
+    """Run args, echoing stdout/stderr live while also recording both for a failure report."""
     sys.stdout.flush()
-    return subprocess.run(['bash', '-c', command])
+    process = subprocess.Popen(
+        args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors='replace'
+    )
+    recorded: dict[str, list[str]] = {'stdout': [], 'stderr': []}
+
+    def pump(stream, echo, key: str) -> None:
+        for line in stream:
+            echo.write(line)
+            echo.flush()
+            recorded[key].append(line)
+
+    pumps = [
+        threading.Thread(target=pump, args=(process.stdout, sys.stdout, 'stdout')),
+        threading.Thread(target=pump, args=(process.stderr, sys.stderr, 'stderr')),
+    ]
+    for thread in pumps:
+        thread.start()
+    returncode = process.wait()
+    for thread in pumps:
+        thread.join()
+    return subprocess.CompletedProcess(args, returncode, ''.join(recorded['stdout']), ''.join(recorded['stderr']))
+
+
+def run_local(command: str) -> subprocess.CompletedProcess:
+    return run_captured(['bash', '-c', command])
 
 
 def run_remote(host: str, user: str, command: str) -> subprocess.CompletedProcess:
-    sys.stdout.flush()
-    return subprocess.run([
+    return run_captured([
         'ssh',
         '-o', 'ConnectTimeout=5',
         '-o', 'BatchMode=yes',
@@ -283,7 +310,78 @@ def run_remote(host: str, user: str, command: str) -> subprocess.CompletedProces
     ])
 
 
-def execute(flat_tasks: list[dict], skip_oversight: bool = False) -> int:
+# ── Failure reports ──────────────────────────────────────────────────────────
+
+ERROR_REPORTS_DIRECTORY = 'error-reports'
+REPORT_TIMESTAMP_FORMAT = '%Y-%m-%dT%H-%M-%S'
+REPORT_FALLBACK_NAME = 'task'
+REPORT_NAME_MAXIMUM_LENGTH = 80
+
+
+def task_label(task: dict) -> str:
+    """The task's name, or the first line of its command when it has none."""
+    return task['name'] or task['command'].strip().splitlines()[0]
+
+
+def safe_file_name(label: str) -> str:
+    """Reduce a task label to characters that are safe in a file name."""
+    cleaned = re.sub(r'[^A-Za-z0-9._-]+', '-', label).strip('-.')
+    return cleaned[:REPORT_NAME_MAXIMUM_LENGTH].strip('-.') or REPORT_FALLBACK_NAME
+
+
+def write_failure_report(
+    task: dict, result: subprocess.CompletedProcess, playbook_name: str, now: datetime.datetime | None = None
+) -> str | None:
+    """Write a TOML report for a failed task into $TOPOLOGIES_HOME/error-reports/.
+
+    The file is written to a temporary name in the same directory and then
+    linked into place, so a half-written report never appears under its final
+    name and an existing report is never overwritten (a counter is appended on
+    a name collision). Returns the report path, or None if it could not be
+    written, in which case the reason goes to stderr: a failure to report must
+    not change the task's exit code.
+    """
+    now = now or datetime.datetime.now()
+    timestamp = now.strftime(REPORT_TIMESTAMP_FORMAT)
+    base_name = f'{safe_file_name(task_label(task))}-{timestamp}'
+    report = {
+        'playbook': playbook_name,
+        'task': task_label(task),
+        'hosts': task['hosts'],
+        'command': task['command'],
+        'exit_code': result.returncode,
+        'timestamp': timestamp,
+        'stdout': result.stdout or '',
+        'stderr': result.stderr or '',
+    }
+    temporary_path = None
+    try:
+        directory = os.path.join(get_topologies_home(), ERROR_REPORTS_DIRECTORY)
+        os.makedirs(directory, exist_ok=True)
+        descriptor, temporary_path = tempfile.mkstemp(dir=directory, prefix='.report-', suffix='.tmp')
+        os.close(descriptor)
+        write_toml(report, temporary_path)
+        counter = 0
+        while True:
+            suffix = f'-{counter}' if counter else ''
+            final_path = os.path.join(directory, f'{base_name}{suffix}.toml')
+            try:
+                os.link(temporary_path, final_path)
+                return final_path
+            except FileExistsError:
+                counter += 1
+    except OSError as e:
+        print(f'Could not write failure report: {e}', file=sys.stderr)
+        return None
+    finally:
+        if temporary_path is not None:
+            try:
+                os.unlink(temporary_path)
+            except OSError:
+                pass
+
+
+def execute(flat_tasks: list[dict], skip_oversight: bool = False, playbook_name: str = '') -> int:
     for t in flat_tasks:
         if t['oversight'] and not skip_oversight:
             label = t['name'] or t['command'].strip().splitlines()[0]
@@ -298,6 +396,9 @@ def execute(flat_tasks: list[dict], skip_oversight: bool = False) -> int:
 
         if result.returncode != 0:
             print(f'Step failed on {t["hosts"]} (exit {result.returncode}); stopping.', file=sys.stderr)
+            report_path = write_failure_report(t, result, playbook_name)
+            if report_path is not None:
+                print(f'Failure report written to {report_path}', file=sys.stderr)
             return result.returncode
 
     return 0
@@ -402,7 +503,7 @@ def main(argv: list[str]) -> None:
 
     print_variables(bindings)
     print_review(flat)
-    sys.exit(execute(flat, skip_oversight=skip_oversight))
+    sys.exit(execute(flat, skip_oversight=skip_oversight, playbook_name=name))
 
 
 if __name__ == '__main__':
