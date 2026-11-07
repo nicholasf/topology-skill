@@ -62,6 +62,8 @@ topology hooks uninstall --target claude|pi|goose [--scope user|project]
 topology hooks status
 ```
 
+Or use the Makefile: `make install-claude`, `make install-pi`, `make install-goose`, `make install` (all three), the matching `uninstall-*` targets, and `make status`. Add `SCOPE=project` for project scope.
+
 (`topology` here means `PYTHONPATH="${SKILLS_HOME:-$HOME/.agents/skills}/topology-skill/src" python3 -m topology.cli`, or the `topology` script if the package is installed.)
 
 | Harness | Mechanism | Per-prompt hints | Installed to (user scope) |
