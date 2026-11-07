@@ -1,6 +1,6 @@
 ---
 name: topology
-description: Read the local system topology to discover available machines and models. Triggers on "topology", "what models are available", "which machines are running", "start a model", "show me the topology", "sync topology", "refresh topology", "benchmark llm", "benchmark model", "test llm", "run benchmark", "run playbook", "list playbooks", "show playbooks", "help", "show help", "list subcommands".
+description: The user's home-lab network, read from $TOPOLOGIES_HOME/topology.toml - machines, GPUs, local LLM models and playbooks. Use whenever the user mentions one of their machines by name, asks what models are available or running, wants to start, stop, swap or benchmark a model, run or list a playbook, or sync, discover or show the topology. Also triggers on "topology", "what models are available", "which machines are running", "start a model", "run playbook", "list playbooks".
 argument-hint: "[sync | benchmark <hostname> <model> | show | run \"<phrase>\" [--skip-oversight] [--var KEY=VALUE ...] | playbook list | help]"
 ---
 
