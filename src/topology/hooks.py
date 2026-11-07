@@ -12,8 +12,8 @@ models, playbooks and how to call the CLI. It is meant to be added once, at
 the start of a session.
 
 prompt reads the user's prompt and prints a targeted hint only when it
-mentions a topology host, a known model, a playbook alias or the words
-"topology"/"playbook". Otherwise it prints nothing, so unrelated prompts add
+mentions a topology host, a known model or a playbook alias. Otherwise it
+prints nothing, so unrelated prompts add
 nothing to the context window.
 
 --format claude reads Claude Code's hook JSON on stdin and writes
@@ -35,7 +35,6 @@ from .sync import get_topology_path
 from .toml_io import read_toml
 
 CLI = 'PYTHONPATH="${SKILLS_HOME:-$HOME/.agents/skills}/topology-skill/src" python3 -m topology.cli'
-KEYWORDS = ('topology', 'playbook', 'playbooks')
 GENERIC_MODEL_PARTS = {'latest', 'gguf'}
 
 CLAUDE_EVENT_NAMES = {'session-start': 'SessionStart', 'prompt': 'UserPromptSubmit'}
@@ -159,9 +158,6 @@ def match_prompt(prompt: str, topology: dict, playbooks: dict[str, dict]) -> lis
                     f'Model {model} is on {row.get("hostname")} '
                     f'({row.get("backend")}, {row.get("status")} at last discover).'
                 )
-
-    if not hints and any(contains_term(prompt, k) for k in KEYWORDS):
-        hints.append('The prompt mentions the topology or playbooks.')
 
     if not hints:
         return []

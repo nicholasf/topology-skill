@@ -52,7 +52,7 @@ topology hook session-start          # summary: machines, running models, playbo
 echo "start qwen on pond" | topology hook prompt   # hint, or nothing if the prompt is unrelated
 ```
 
-The prompt hook matches playbook aliases, machine names and model names as whole words (plus the words "topology" and "playbook"). It reads local TOML only (no network or SSH) and takes about 40 ms. On any error it prints nothing and exits 0, so it never blocks a prompt. It prints nothing for unrelated prompts because everything a hook adds stays in the context window for the rest of the session.
+The prompt hook matches playbook aliases, machine names and model names as whole words. It reads local TOML only (no network or SSH) and takes about 40 ms. On any error it prints nothing and exits 0, so it never blocks a prompt. It prints nothing for unrelated prompts because everything a hook adds stays in the context window for the rest of the session.
 
 Install, remove or check the adapters with:
 

@@ -75,9 +75,8 @@ def test_match_prompt_is_empty_for_unrelated_prompt():
     assert match_prompt('refactor the parser in sync.py', TOPOLOGY, PLAYBOOKS) == []
 
 
-def test_match_prompt_falls_back_to_keywords():
-    lines = match_prompt('show me the topology', TOPOLOGY, PLAYBOOKS)
-    assert lines and 'mentions the topology' in lines[-1]
+def test_match_prompt_ignores_bare_topology_and_playbook_words():
+    assert match_prompt('explain the topology skill and its playbooks', TOPOLOGY, PLAYBOOKS) == []
 
 
 def test_match_prompt_skips_slash_commands_and_missing_topology():
