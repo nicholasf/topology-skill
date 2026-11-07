@@ -16,6 +16,8 @@ SUBCOMMANDS = [
     ('docs', 'Write a per-file markdown breakdown (with line-number links) into $TOPOLOGIES_HOME/README.md.'),
     ('run "<phrase>" [--skip-oversight]', 'Resolve a trigger phrase to a playbook and run it.'),
     ('playbook list', 'List every playbook: name, description, aliases, source file.'),
+    ('hook session-start|prompt [--format text|claude]', 'Print topology context for an agent hook (used by installed hooks).'),
+    ('hooks install|uninstall|status --target claude|pi|goose', 'Install hooks so agents use the topology proactively.'),
     ('help', 'Show this help message.'),
 ]
 
