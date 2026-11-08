@@ -18,6 +18,7 @@ SUBCOMMANDS = [
     ('playbook list', 'List every playbook: name, description, aliases, source file.'),
     ('hook session-start|prompt [--format text|claude]', 'Print topology context for an agent hook (used by installed hooks).'),
     ('hooks install|uninstall|status --target claude|pi|goose', 'Install hooks so agents use the topology proactively.'),
+    ('notation complete', 'Print the notation key and its handles as JSON (used by the pi autocomplete).'),
     ('help', 'Show this help message.'),
 ]
 
