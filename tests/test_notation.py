@@ -186,3 +186,43 @@ def test_prompt_hook_falls_back_to_plain_hints(capsys):
     out = run_prompt_hook('is pond up?', capsys)
     assert 'Host pond is in the topology' in out
     assert '<skill-notation' not in out
+
+
+# ── completion (pi autocomplete) ─────────────────────────────────────────────
+
+from topology.notation import build_completion, completion_items, encode_payload  # noqa: E402
+
+
+def test_encode_payload_uses_plus_for_spaces_and_keeps_colons():
+    assert encode_payload('wake pond up') == 'wake+pond+up'
+    assert encode_payload('qwen3-coder:30b') == 'qwen3-coder:30b'
+
+
+def test_completion_items_cover_hosts_models_playbooks_and_aliases():
+    values = {i['value']: i['description'] for i in completion_items(TOPOLOGY, PLAYBOOKS)}
+    assert values['pond'] == 'host: linux, ssh'
+    assert values['qwen3-coder:30b'] == 'model on pond (ollama, up)'
+    assert values['start-pond-qwen'] == 'playbook: Start qwen on pond'
+    assert values['wake+pond+up'] == 'alias of playbook start-pond-qwen'
+
+
+def test_completion_values_round_trip_through_find_notations_and_expand():
+    for item in completion_items(TOPOLOGY, PLAYBOOKS):
+        [(_, payload)] = find_notations(f'^top:{item["value"]}', '^top')
+        assert expand(payload, TOPOLOGY, PLAYBOOKS)[0] == 'expanded', item
+
+
+def test_build_completion_includes_key_and_skill():
+    completion = build_completion(TOPOLOGY, PLAYBOOKS)
+    assert completion['key'] == '^top'
+    assert completion['skill'] == 'topology'
+    assert completion['handles']
+
+
+def test_notation_complete_cli_prints_json(capsys):
+    import json
+    from topology.notation import main as notation_main
+    with patch('topology.notation.load_topology', return_value=TOPOLOGY), \
+         patch('topology.notation.load_playbooks_quietly', return_value=PLAYBOOKS):
+        notation_main(['complete'])
+    assert json.loads(capsys.readouterr().out)['key'] == '^top'

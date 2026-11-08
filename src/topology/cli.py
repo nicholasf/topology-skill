@@ -3,7 +3,7 @@
 
 import sys
 
-from . import benchmark_llm, discover, docs, help as help_module, hooks, hooks_install, init, playbook, show, sync
+from . import benchmark_llm, discover, docs, help as help_module, hooks, hooks_install, init, notation, playbook, show, sync
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -25,6 +25,7 @@ def main(argv: list[str] | None = None) -> None:
         'playbook': lambda: playbook.playbook_main(rest),
         'hook': lambda: hooks.main(rest),
         'hooks': lambda: hooks_install.main(rest),
+        'notation': lambda: notation.main(rest),
     }
 
     if command not in dispatch:

@@ -49,15 +49,16 @@ log to stderr.
 """
 
 import difflib
+import json
 import logging
 import os
 import re
 import sys
 from pathlib import Path
-from urllib.parse import unquote_plus
+from urllib.parse import quote_plus, unquote_plus
 from xml.sax.saxutils import escape, quoteattr
 
-from .hooks import CLI, build_summary, model_terms, playbook_hosts
+from .hooks import CLI, build_summary, load_playbooks_quietly, load_topology, model_terms, playbook_hosts
 from .playbook import VAR_PATTERN, normalize_phrase, resolve_alias
 
 SKILL_MD = Path(__file__).resolve().parents[2] / 'SKILL.md'
@@ -252,3 +253,50 @@ def expand_prompt(prompt: str, topology: dict, playbooks: dict[str, dict], key: 
         log.info('expanded form:\n%s', form)
         forms.append(form)
     return '\n'.join(forms)
+
+
+# ── Completion (pi autocomplete) ─────────────────────────────────────────────
+
+def encode_payload(handle: str) -> str:
+    """URL-encode a handle for a notation; `+` for spaces, `:` left readable."""
+    return quote_plus(handle, safe=':')
+
+
+def completion_items(topology: dict, playbooks: dict[str, dict]) -> list[dict]:
+    """Handles this skill can resolve, each as {value, description}, value URL-encoded."""
+    items: list[dict] = []
+    seen: set[str] = set()
+
+    def add(handle: str, description: str) -> None:
+        value = encode_payload(handle)
+        if handle and value not in seen:
+            seen.add(value)
+            items.append({'value': value, 'description': description})
+
+    for machine in topology.get('machines', []):
+        add(machine.get('name', ''), f'host: {machine.get("os", "unknown os")}, {"ssh" if machine.get("ssh") else "no ssh"}')
+    for row in topology.get('model_state', []):
+        for model in row.get('models', []):
+            add(model, f'model on {row.get("hostname")} ({row.get("backend")}, {row.get("status")})')
+    for pb in playbooks.values():
+        summary = pb.get('description', '') or 'playbook'
+        add(pb['name'], f'playbook: {summary}')
+        for alias in pb['aliases']:
+            add(alias, f'alias of playbook {pb["name"]}')
+    return items
+
+
+def build_completion(topology: dict, playbooks: dict[str, dict]) -> dict:
+    return {
+        'key': read_notation_key(),
+        'skill': read_skill_name(),
+        'description': 'machines, models and playbooks in the home-lab topology',
+        'handles': completion_items(topology, playbooks),
+    }
+
+
+def main(argv: list[str]) -> None:
+    if argv != ['complete']:
+        print('usage: topology notation complete', file=sys.stderr)
+        sys.exit(1)
+    print(json.dumps(build_completion(load_topology(), load_playbooks_quietly())))
