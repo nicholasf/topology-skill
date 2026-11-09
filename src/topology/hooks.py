@@ -15,7 +15,7 @@ prompt reads the user's prompt and prints a targeted hint only when it
 mentions a topology host, a known model or a playbook alias. Otherwise it
 prints nothing, so unrelated prompts add
 nothing to the context window. If the prompt contains skill notations
-(`^top:pond`, see notation.py), it prints their expanded forms instead.
+(`^top:pond`, see resolve_notation.py), it prints their expanded forms instead.
 
 --format claude reads Claude Code's hook JSON on stdin and writes
 {"hookSpecificOutput": {...additionalContext}}; --format text reads/writes
@@ -101,7 +101,7 @@ def build_summary(topology: dict, playbooks: dict[str, dict]) -> str:
 
     lines.append(f'CLI: {CLI} show | discover | sync | run "<alias>" [--var KEY=VALUE] | playbook list')
 
-    from .notation import read_notation_key  # imported here: notation imports this module
+    from .resolve_notation import read_notation_key  # imported here: resolve_notation imports this module
     key = read_notation_key()
     lines.append(
         f'Notation: {key} or {key}:<machine|model|playbook> in the user\'s message is followed by '
@@ -215,7 +215,7 @@ def run(event: str, fmt: str, stdin_text: str) -> str:
     if event == 'session-start':
         text = build_summary(topology, playbooks)
     else:
-        from .notation import expand_prompt  # imported here: notation imports this module
+        from .resolve_notation import expand_prompt  # imported here: resolve_notation imports this module
         prompt = read_prompt(stdin_text, fmt)
         # Explicit notations take precedence over guessing from plain language.
         text = expand_prompt(prompt, topology, playbooks) or build_prompt_hint(prompt, topology, playbooks)
