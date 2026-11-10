@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pytest
 
 from topology.hooks import main
-from topology.notation import (
+from topology.resolve_notation import (
     build_expanded_form,
     expand,
     expand_prompt,
@@ -190,7 +190,7 @@ def test_prompt_hook_falls_back_to_plain_hints(capsys):
 
 # ── completion (pi autocomplete) ─────────────────────────────────────────────
 
-from topology.notation import build_completion, completion_items, encode_payload  # noqa: E402
+from topology.resolve_notation import build_completion, completion_items, encode_payload  # noqa: E402
 
 
 def test_encode_payload_uses_plus_for_spaces_and_keeps_colons():
@@ -221,8 +221,8 @@ def test_build_completion_includes_key_and_skill():
 
 def test_notation_complete_cli_prints_json(capsys):
     import json
-    from topology.notation import main as notation_main
-    with patch('topology.notation.load_topology', return_value=TOPOLOGY), \
-         patch('topology.notation.load_playbooks_quietly', return_value=PLAYBOOKS):
+    from topology.resolve_notation import main as notation_main
+    with patch('topology.resolve_notation.load_topology', return_value=TOPOLOGY), \
+         patch('topology.resolve_notation.load_playbooks_quietly', return_value=PLAYBOOKS):
         notation_main(['complete'])
     assert json.loads(capsys.readouterr().out)['key'] == '^top'

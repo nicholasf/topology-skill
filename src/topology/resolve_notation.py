@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-notation.py — proof of concept for skill notations.
+resolve_notation.py — proof of concept for skill notations.
 
 A notation is a short reference typed into a prompt, e.g. `^top:pond`:
 
@@ -66,7 +66,7 @@ DEFAULT_KEY = '^top'
 DEFAULT_SKILL_NAME = 'topology'
 TRAILING_PUNCTUATION = '.,;:!?)\'"'
 
-log = logging.getLogger('topology.notation')
+log = logging.getLogger('topology.resolve_notation')
 
 
 # ── Logging ──────────────────────────────────────────────────────────────────
