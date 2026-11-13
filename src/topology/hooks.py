@@ -8,11 +8,11 @@ Invoked via:
   topology hook prompt        [--format text|claude]   (prompt on stdin)
 
 session-start prints a short summary of the topology: machines, running
-models, playbooks and how to call the CLI. It is meant to be added once, at
+LLMs, playbooks and how to call the CLI. It is meant to be added once, at
 the start of a session.
 
 prompt reads the user's prompt and prints a targeted hint only when it
-mentions a topology host, a known model or a playbook alias. Otherwise it
+mentions a topology host, a known LLM or a playbook alias. Otherwise it
 prints nothing, so unrelated prompts add
 nothing to the context window. If the prompt contains skill notations
 (`^top:pond`, see resolve_notation.py), it prints their expanded forms instead.
@@ -31,23 +31,23 @@ import os
 import re
 import sys
 
+from .models import LLM, Backend, Topology, read_topology
 from .playbook import PlaybookError, get_topologies_home, load_playbooks, normalize_phrase
 from .sync import get_topology_path
-from .toml_io import read_toml
 
 CLI = 'PYTHONPATH="${SKILLS_HOME:-$HOME/.agents/skills}/topology-skill/src" python3 -m topology.cli'
-GENERIC_MODEL_PARTS = {'latest', 'gguf'}
+GENERIC_LLM_PARTS = {'latest', 'gguf'}
 
 CLAUDE_EVENT_NAMES = {'session-start': 'SessionStart', 'prompt': 'UserPromptSubmit'}
 
 
 # ── Loading ──────────────────────────────────────────────────────────────────
 
-def load_topology() -> dict:
+def load_topology() -> Topology | None:
     path = get_topology_path()
     if not os.path.exists(path):
-        return {}
-    return read_toml(path)
+        return None
+    return read_topology(path)
 
 
 def load_playbooks_quietly() -> dict[str, dict]:
@@ -62,36 +62,43 @@ def playbook_hosts(playbook: dict) -> set[str]:
     return {t['hosts'] for t in playbook['tasks'] if 'hosts' in t}
 
 
-def up_models(topology: dict) -> list[dict]:
-    """model_state rows for running backends that report at least one model."""
-    return [
-        row for row in topology.get('model_state', [])
-        if row.get('status') == 'up' and row.get('models')
-    ]
+def running_backends(topology: Topology) -> list[tuple[Backend, list[LLM]]]:
+    """Each backend that is up and serves at least one LLM, with those LLMs."""
+    running = []
+    for backend in topology.backends:
+        llms = topology.llms_on(backend.hostname, backend.name)
+        if backend.status == 'up' and llms:
+            running.append((backend, llms))
+    return running
+
+
+def llm_status(topology: Topology, llm: LLM) -> str:
+    """The status of the backend serving an LLM, or 'unknown' if it has no backend row."""
+    backend = topology.backend_of(llm)
+    return backend.status if backend else 'unknown'
 
 
 # ── Session-start summary ────────────────────────────────────────────────────
 
-def build_summary(topology: dict, playbooks: dict[str, dict]) -> str:
-    if not topology:
+def build_summary(topology: Topology | None, playbooks: dict[str, dict]) -> str:
+    if topology is None:
         return ''
 
     lines = [
         f'[topology] The user keeps a home-lab topology at {get_topology_path()}.',
-        'For anything about these machines, their models, or services on them, use the '
+        'For anything about these machines, their LLMs, or services on them, use the '
         'topology skill (or the CLI below) rather than guessing.',
     ]
 
-    machines = topology.get('machines', [])
-    if machines:
-        names = [m['name'] + (' (ssh)' if m.get('ssh') else '') for m in machines if m.get('name')]
+    if topology.machines:
+        names = [m.name + (' (ssh)' if m.ssh else '') for m in topology.machines if m.name]
         lines.append('Machines: ' + ', '.join(names))
 
-    running = up_models(topology)
+    running = running_backends(topology)
     if running:
-        lines.append('Models running at last discover:')
-        for row in running:
-            lines.append(f"  {row.get('hostname')} {row.get('backend')}: {', '.join(row['models'])}")
+        lines.append('LLMs running at last discover:')
+        for backend, llms in running:
+            lines.append(f"  {backend.hostname} {backend.name}: {', '.join(l.name for l in llms)}")
 
     if playbooks:
         lines.append('Playbooks (run with: topology run "<alias>"):')
@@ -104,7 +111,7 @@ def build_summary(topology: dict, playbooks: dict[str, dict]) -> str:
     from .resolve_notation import read_notation_key  # imported here: resolve_notation imports this module
     key = read_notation_key()
     lines.append(
-        f'Notation: {key} or {key}:<machine|model|playbook> in the user\'s message is followed by '
+        f'Notation: {key} or {key}:<machine|llm|playbook> in the user\'s message is followed by '
         '<skill-notation> blocks, each pairing the notation with its expanded form.'
     )
     return '\n'.join(lines)
@@ -120,20 +127,20 @@ def contains_term(text: str, term: str) -> bool:
     return re.search(pattern, text.lower()) is not None
 
 
-def model_terms(model: str) -> set[str]:
-    """The full model name plus its base name (before ':' or '.gguf') when distinctive."""
-    terms = {model}
-    base = model.split(':', 1)[0]
+def llm_terms(name: str) -> set[str]:
+    """The full LLM name plus its base name (before ':' or '.gguf') when distinctive."""
+    terms = {name}
+    base = name.split(':', 1)[0]
     if base.endswith('.gguf'):
         base = base[:-len('.gguf')]
-    if len(base) >= 4 and base not in GENERIC_MODEL_PARTS:
+    if len(base) >= 4 and base not in GENERIC_LLM_PARTS:
         terms.add(base)
     return terms
 
 
-def match_prompt(prompt: str, topology: dict, playbooks: dict[str, dict]) -> list[str]:
+def match_prompt(prompt: str, topology: Topology | None, playbooks: dict[str, dict]) -> list[str]:
     """Return hint lines for everything in the prompt that refers to the topology."""
-    if not topology or prompt.lstrip().startswith('/'):
+    if topology is None or prompt.lstrip().startswith('/'):
         return []
 
     hints: list[str] = []
@@ -148,31 +155,30 @@ def match_prompt(prompt: str, topology: dict, playbooks: dict[str, dict]) -> lis
                 )
                 break
 
-    for machine in topology.get('machines', []):
-        name = machine.get('name', '')
-        if not any(contains_term(prompt, t) for t in {name, machine.get('hostname', '')} if t):
+    for machine in topology.machines:
+        name = machine.name
+        if not any(contains_term(prompt, t) for t in {name, machine.hostname} if t):
             continue
-        detail = ', ssh' if machine.get('ssh') else ', no ssh'
-        line = f'Host {name} is in the topology ({machine.get("os", "unknown os")}{detail}).'
+        detail = ', ssh' if machine.ssh else ', no ssh'
+        line = f'Host {name} is in the topology ({machine.os or "unknown os"}{detail}).'
         related = [pb['name'] for pb in playbooks.values() if name in playbook_hosts(pb)]
         if related:
             line += ' Playbooks targeting it: ' + ', '.join(related) + '.'
         hints.append(line)
 
-    for row in topology.get('model_state', []):
-        for model in row.get('models', []):
-            if any(contains_term(prompt, t) for t in model_terms(model)):
-                hints.append(
-                    f'Model {model} is on {row.get("hostname")} '
-                    f'({row.get("backend")}, {row.get("status")} at last discover).'
-                )
+    for llm in topology.llms:
+        if any(contains_term(prompt, t) for t in llm_terms(llm.name)):
+            hints.append(
+                f'LLM {llm.name} is on {llm.hostname} '
+                f'({llm.backend}, {llm_status(topology, llm)} at last discover).'
+            )
 
     if not hints:
         return []
     return ['[topology] This prompt refers to the user\'s home-lab topology; use the topology skill.', *hints]
 
 
-def build_prompt_hint(prompt: str, topology: dict, playbooks: dict[str, dict]) -> str:
+def build_prompt_hint(prompt: str, topology: Topology | None, playbooks: dict[str, dict]) -> str:
     return '\n'.join(match_prompt(prompt, topology, playbooks))
 
 

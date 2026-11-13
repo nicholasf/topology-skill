@@ -69,8 +69,9 @@ def build_world(root: Path) -> dict[str, str]:
         'schema_version': 1,
         'provider': 'manual',
         'machines': [{'name': 'pond', 'hostname': 'pond', 'os': 'linux', 'ssh': True}],
-        'model_state': [{'hostname': 'pond', 'backend': 'ollama', 'port': 11434,
-                         'models': ['qwen3-coder:30b'], 'status': 'up'}],
+        'schema_version': 2,
+        'backends': [{'hostname': 'pond', 'name': 'ollama', 'port': 11434, 'status': 'up'}],
+        'llms': [{'hostname': 'pond', 'backend': 'ollama', 'name': 'qwen3-coder:30b'}],
     }, str(topologies / 'topology.toml'))
     (topologies / 'topology-playbook-pond.toml').write_text(PLAYBOOK_TOML)
 

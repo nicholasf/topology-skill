@@ -10,8 +10,9 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 
+from .models import read_topology_data
 from .sync import get_topology_path
-from .toml_io import read_toml, write_toml
+from .toml_io import write_toml
 
 BENCHMARK_PROMPT = "Explain the concept of recursion in programming in two sentences."
 
@@ -75,24 +76,24 @@ def run_benchmark(hostname: str, port: int, model: str, runs: int) -> tuple[floa
 
 
 def record_result(
-    topology_path: str, hostname: str, model: str,
+    topology_path: str, hostname: str, llm: str,
     ttft_ms: float, tok_s: float, runs: int,
 ) -> None:
-    data = read_toml(topology_path)
+    data = read_topology_data(topology_path)
     rows = data.get('benchmarks', [])
 
     new_row = {
         'hostname': hostname,
-        'model': model,
+        'llm': llm,
         'timestamp': datetime.now().strftime('%Y-%m-%dT%H-%M-%S'),
         'ttft_ms': ttft_ms,
         'tok_s': tok_s,
         'runs': runs,
     }
 
-    rows = [r for r in rows if not (r['hostname'] == hostname and r['model'] == model)]
+    rows = [r for r in rows if not (r['hostname'] == hostname and r['llm'] == llm)]
     rows.append(new_row)
-    rows.sort(key=lambda r: (r['hostname'], r['model']))
+    rows.sort(key=lambda r: (r['hostname'], r['llm']))
 
     data['benchmarks'] = rows
     write_toml(data, topology_path)

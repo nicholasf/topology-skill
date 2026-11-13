@@ -37,8 +37,8 @@ says so.
 
 Payloads this skill understands:
   (none)            ^top                    the topology summary
-  machine           ^top:pond               host details, models, playbooks targeting it
-  model             ^top:qwen3-coder        where the model is running
+  machine           ^top:pond               host details, backends and LLMs, playbooks targeting it
+  llm               ^top:qwen3-coder        where the LLM is running
   playbook          ^top:start-pond-qwen    playbook details and how to run it
                     ^top:wake+pond+up       (a playbook alias works too)
 Anything else gives <error> with suggestions.
@@ -58,7 +58,8 @@ from pathlib import Path
 from urllib.parse import quote_plus, unquote_plus
 from xml.sax.saxutils import escape, quoteattr
 
-from .hooks import CLI, build_summary, load_playbooks_quietly, load_topology, model_terms, playbook_hosts
+from .hooks import CLI, build_summary, llm_status, llm_terms, load_playbooks_quietly, load_topology, playbook_hosts
+from .models import Machine, Topology
 from .playbook import VAR_PATTERN, normalize_phrase, resolve_alias
 
 SKILL_MD = Path(__file__).resolve().parents[2] / 'SKILL.md'
@@ -142,14 +143,13 @@ def find_notations(prompt: str, key: str) -> list[tuple[str, str]]:
 
 # ── Resolving payloads ───────────────────────────────────────────────────────
 
-def describe_machine(machine: dict, topology: dict, playbooks: dict[str, dict]) -> str:
-    name = machine.get('name', '')
-    names = {name, machine.get('hostname', '')} - {''}
-    parts = [f'Host {name}: {machine.get("os", "unknown os")}, {"ssh" if machine.get("ssh") else "no ssh"}.']
-    for row in topology.get('model_state', []):
-        if row.get('hostname') in names:
-            models = ', '.join(row.get('models', [])) or 'no models'
-            parts.append(f'{row.get("backend")} ({row.get("status")} at last discover): {models}.')
+def describe_machine(machine: Machine, topology: Topology, playbooks: dict[str, dict]) -> str:
+    name = machine.name
+    names = {name, machine.hostname} - {''}
+    parts = [f'Host {name}: {machine.os or "unknown os"}, {"ssh" if machine.ssh else "no ssh"}.']
+    for backend in topology.backends_on(machine.hostname):
+        llms = ', '.join(l.name for l in topology.llms_on(machine.hostname, backend.name)) or 'no LLMs'
+        parts.append(f'{backend.name} ({backend.status} at last discover): {llms}.')
     related = [pb['name'] for pb in playbooks.values() if names & playbook_hosts(pb)]
     if related:
         parts.append('Playbooks targeting it: ' + ', '.join(related) + '.')
@@ -171,21 +171,20 @@ def describe_playbook(pb: dict) -> str:
     return ' '.join(parts)
 
 
-def all_handles(topology: dict, playbooks: dict[str, dict]) -> list[str]:
+def all_handles(topology: Topology, playbooks: dict[str, dict]) -> list[str]:
     handles = set()
-    for m in topology.get('machines', []):
-        handles |= {m.get('name', ''), m.get('hostname', '')}
-    for row in topology.get('model_state', []):
-        for model in row.get('models', []):
-            handles |= model_terms(model)
+    for m in topology.machines:
+        handles |= {m.name, m.hostname}
+    for llm in topology.llms:
+        handles |= llm_terms(llm.name)
     for pb in playbooks.values():
         handles |= {pb['name'], *pb['aliases']}
     return sorted(handles - {''})
 
 
-def expand(payload: str, topology: dict, playbooks: dict[str, dict]) -> tuple[str, str, str]:
+def expand(payload: str, topology: Topology | None, playbooks: dict[str, dict]) -> tuple[str, str, str]:
     """Resolve a payload. Returns (tag, kind, text); tag is 'expanded' or 'error'."""
-    if not topology:
+    if topology is None:
         return 'error', 'none', 'No topology found; run the topology skill to set one up.'
     if not payload:
         return 'expanded', 'summary', build_summary(topology, playbooks)
@@ -193,18 +192,17 @@ def expand(payload: str, topology: dict, playbooks: dict[str, dict]) -> tuple[st
     wanted = payload.lower()
     descriptions: list[tuple[str, str]] = []
 
-    for machine in topology.get('machines', []):
-        if wanted in {machine.get('name', '').lower(), machine.get('hostname', '').lower()}:
+    for machine in topology.machines:
+        if wanted in {machine.name.lower(), machine.hostname.lower()}:
             descriptions.append(('host', describe_machine(machine, topology, playbooks)))
 
-    model_lines = []
-    for row in topology.get('model_state', []):
-        for model in row.get('models', []):
-            if wanted in {t.lower() for t in model_terms(model)}:
-                model_lines.append(f'Model {model} is on {row.get("hostname")} '
-                                   f'({row.get("backend")}, {row.get("status")} at last discover).')
-    if model_lines:
-        descriptions.append(('model', ' '.join(model_lines)))
+    llm_lines = []
+    for llm in topology.llms:
+        if wanted in {t.lower() for t in llm_terms(llm.name)}:
+            llm_lines.append(f'LLM {llm.name} is on {llm.hostname} '
+                             f'({llm.backend}, {llm_status(topology, llm)} at last discover).')
+    if llm_lines:
+        descriptions.append(('llm', ' '.join(llm_lines)))
 
     name = payload if payload in playbooks else resolve_alias(payload, playbooks)
     if name:
@@ -234,7 +232,7 @@ def build_expanded_form(notation: str, tag: str, text: str, skill: str) -> str:
     )
 
 
-def expand_prompt(prompt: str, topology: dict, playbooks: dict[str, dict], key: str | None = None) -> str:
+def expand_prompt(prompt: str, topology: Topology | None, playbooks: dict[str, dict], key: str | None = None) -> str:
     """Expanded forms for every notation in the prompt, or '' when there are none."""
     key = key or read_notation_key()
     skill = read_skill_name()
@@ -262,7 +260,7 @@ def encode_payload(handle: str) -> str:
     return quote_plus(handle, safe=':')
 
 
-def completion_items(topology: dict, playbooks: dict[str, dict]) -> list[dict]:
+def completion_items(topology: Topology | None, playbooks: dict[str, dict]) -> list[dict]:
     """Handles this skill can resolve, each as {value, description}, value URL-encoded."""
     items: list[dict] = []
     seen: set[str] = set()
@@ -273,11 +271,11 @@ def completion_items(topology: dict, playbooks: dict[str, dict]) -> list[dict]:
             seen.add(value)
             items.append({'value': value, 'description': description})
 
-    for machine in topology.get('machines', []):
-        add(machine.get('name', ''), f'host: {machine.get("os", "unknown os")}, {"ssh" if machine.get("ssh") else "no ssh"}')
-    for row in topology.get('model_state', []):
-        for model in row.get('models', []):
-            add(model, f'model on {row.get("hostname")} ({row.get("backend")}, {row.get("status")})')
+    if topology is not None:
+        for machine in topology.machines:
+            add(machine.name, f'host: {machine.os or "unknown os"}, {"ssh" if machine.ssh else "no ssh"}')
+        for llm in topology.llms:
+            add(llm.name, f'llm on {llm.hostname} ({llm.backend}, {llm_status(topology, llm)})')
     for pb in playbooks.values():
         summary = pb.get('description', '') or 'playbook'
         add(pb['name'], f'playbook: {summary}')
@@ -286,11 +284,11 @@ def completion_items(topology: dict, playbooks: dict[str, dict]) -> list[dict]:
     return items
 
 
-def build_completion(topology: dict, playbooks: dict[str, dict]) -> dict:
+def build_completion(topology: Topology | None, playbooks: dict[str, dict]) -> dict:
     return {
         'key': read_notation_key(),
         'skill': read_skill_name(),
-        'description': 'machines, models and playbooks in the home-lab topology',
+        'description': 'machines, LLMs and playbooks in the home-lab topology',
         'handles': completion_items(topology, playbooks),
     }
 

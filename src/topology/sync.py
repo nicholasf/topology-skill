@@ -7,7 +7,8 @@ import sys
 from datetime import datetime
 
 from .discover_tailscale import ManualProvider, TailscaleProvider
-from .toml_io import read_toml, write_toml
+from .models import read_topology_data
+from .toml_io import write_toml
 
 
 def get_topology_path() -> str:
@@ -69,7 +70,7 @@ def main():
 
     backup(topology_path)
 
-    data = read_toml(topology_path)
+    data = read_topology_data(topology_path)
     existing_machines = data.get('machines', [])
 
     provider_name = read_provider(data)

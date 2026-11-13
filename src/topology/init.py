@@ -17,6 +17,7 @@ import subprocess
 import sys
 from datetime import datetime
 
+from .models import SCHEMA_VERSION
 from .sync import get_topology_path
 from .toml_io import write_toml
 
@@ -28,7 +29,7 @@ def machines_to_rows(machines: list[dict]) -> list[dict]:
 def write_topology(provider: str, machines: list[dict], topology_path: str) -> None:
     os.makedirs(os.path.dirname(topology_path), exist_ok=True)
     data = {
-        'schema_version': 1,
+        'schema_version': SCHEMA_VERSION,
         'provider': provider,
         'last_refreshed': datetime.now().strftime('%Y-%m-%dT%H-%M-%S'),
         'machines': machines,

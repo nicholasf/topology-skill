@@ -71,7 +71,7 @@ def test_write_topology_creates_file(tmp_path):
     assert os.path.exists(path)
     data = read_toml(path)
     assert data['provider'] == 'manual'
-    assert data['schema_version'] == 1
+    assert data['schema_version'] == 2
     assert 'last_refreshed' in data
     assert data.get('machines', []) == []
 
