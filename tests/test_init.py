@@ -70,8 +70,8 @@ def test_write_topology_creates_file(tmp_path):
     write_topology('manual', [], path)
     assert os.path.exists(path)
     data = read_toml(path)
-    assert data['provider'] == 'manual'
-    assert data['schema_version'] == 1
+    assert data['network'] == 'manual'
+    assert data['schema_version'] == 2
     assert 'last_refreshed' in data
     assert data.get('machines', []) == []
 
@@ -100,7 +100,7 @@ def test_main_tailscale_non_interactive(tmp_path, monkeypatch):
         with patch.object(sys, 'argv', ['init.py', '--provider', 'tailscale']):
             main()
     data = read_toml(str(tmp_path / 'topology.toml'))
-    assert data['provider'] == 'tailscale'
+    assert data['network'] == 'tailscale'
     assert data.get('machines', []) == []
 
 
@@ -112,7 +112,7 @@ def test_main_manual_non_interactive(tmp_path, monkeypatch):
         with patch.object(sys, 'argv', ['init.py', '--provider', 'manual', '--machines', 'pond 192.168.86.118']):
             main()
     data = read_toml(str(tmp_path / 'topology.toml'))
-    assert data['provider'] == 'manual'
+    assert data['network'] == 'manual'
     assert data['machines'][0]['hostname'] == 'pond'
     assert data['machines'][0]['local_ip'] == '192.168.86.118'
 
@@ -138,4 +138,4 @@ def test_main_force_overwrites_existing(tmp_path, monkeypatch):
             from topology.init import main
             main()
     data = read_toml(str(tmp_path / 'topology.toml'))
-    assert data['provider'] == 'manual'
+    assert data['network'] == 'manual'

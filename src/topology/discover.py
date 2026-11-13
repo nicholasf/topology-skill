@@ -10,21 +10,27 @@ Probes every machine in the machines table:
   - HTTP:  configured agent endpoints (hermes_gateway, goose_acp_url keys)
   - SSH:   pgrep scan for known agent processes
 
-Writes/replaces two arrays in topology.toml:
-  model_state  — inference backend status, models, and context windows per node
-  agent_state  — per-node agent liveness and reasoning_buffer
+Writes/replaces four arrays in topology.toml (schema_version 2, see models.py):
+  llm_providers  — one row per LLM server per node: status, port, context window
+  llms           — one row per LLM, naming the node and provider that serve it
+  agents         — one row per agent runtime per node: liveness and reasoning_buffer
+  ggufs          — one row per GGUF file found on a node over SSH
+
+A schema_version 1 file (model_state / agent_state) is upgraded on write.
 """
 
 import json
 import os
+import posixpath
 import subprocess
 import sys
 import urllib.error
 import urllib.request
 from datetime import datetime
 
+from .models import GGUF, GGUF_DIR, LLM, Agent, LLMProvider, read_topology_data
 from .sync import get_topology_path
-from .toml_io import read_toml, write_toml
+from .toml_io import write_toml
 
 AGENT_SSH_USER = os.environ.get('AGENT_SSH_USER', 'nicholasf')
 
@@ -103,12 +109,12 @@ def probe_ollama_context_window(host: str, model: str) -> int | None:
 
 # ── Preserved reasoning_buffer values ────────────────────────────────────────
 
-def read_existing_agent_reasoning_buffers(agent_state: list[dict]) -> dict[tuple[str, str], int]:
-    """Read existing reasoning_buffer values from agent_state before overwriting."""
+def read_existing_agent_reasoning_buffers(agents: list[dict]) -> dict[tuple[str, str], int]:
+    """Read existing reasoning_buffer values from the agents table before overwriting."""
     return {
-        (row['hostname'], row['agent']): row['reasoning_buffer']
-        for row in agent_state
-        if row.get('hostname') and row.get('agent') and row.get('reasoning_buffer') is not None
+        (row['hostname'], row['name']): row['reasoning_buffer']
+        for row in agents
+        if row.get('hostname') and row.get('name') and row.get('reasoning_buffer') is not None
     }
 
 
@@ -154,8 +160,8 @@ def discover_hardware(host: str, user: str, os_name: str) -> dict:
 
 
 def list_ggufs(host: str, user: str) -> list[str]:
-    out = ssh_run(host, user,
-        "ls ~/.local/share/gguf/*.gguf 2>/dev/null | xargs -I{} basename {} 2>/dev/null")
+    """Full paths of the GGUF files in GGUF_DIR on a host."""
+    out = ssh_run(host, user, f"ls -1 {GGUF_DIR}/*.gguf 2>/dev/null")
     if not out:
         return []
     return [f.strip() for f in out.splitlines() if f.strip()]
@@ -192,7 +198,7 @@ def probe_agents(host: str, user: str | None, row: dict) -> list[dict]:
         proc = ssh_run(host, user, f"pgrep -x {agent_name} 2>/dev/null | head -1") if user else None
         entry = {
             'hostname': host,
-            'agent': agent_name,
+            'name': agent_name,
             'endpoint': endpoint,
             'status': 'up' if up else 'down',
             'process': ('running' if proc else 'not found') if user else '(no SSH)',
@@ -202,7 +208,7 @@ def probe_agents(host: str, user: str | None, row: dict) -> list[dict]:
         results.append(entry)
 
     if user:
-        covered = {r['agent'] for r in results}
+        covered = {r['name'] for r in results}
         for proc_name in KNOWN_AGENT_PROCS:
             if proc_name in covered:
                 continue
@@ -210,7 +216,7 @@ def probe_agents(host: str, user: str | None, row: dict) -> list[dict]:
             if pid:
                 results.append({
                     'hostname': host,
-                    'agent': proc_name,
+                    'name': proc_name,
                     'endpoint': '(not configured)',
                     'status': 'process up',
                     'process': 'running',
@@ -222,52 +228,58 @@ def probe_agents(host: str, user: str | None, row: dict) -> list[dict]:
 
 # ── Section builders ──────────────────────────────────────────────────────────
 
-def build_model_state(discoveries: dict) -> list[dict]:
-    rows = []
+# Each LLM provider: (name in topology.toml, key in probe_models output, port).
+LLM_PROVIDERS = [('llama-server', 'llama_server', 9337), ('ollama', 'ollama', 11434)]
+
+
+def build_llm_providers(discoveries: dict) -> list[LLMProvider]:
+    """One LLMProvider per server per host, up or down."""
+    providers = []
     now = ts()
-
     for host in sorted(discoveries):
-        d = discoveries[host]
-        models = d.get('models', {})
-
-        ls = models.get('llama_server', {})
-        row = {'hostname': host, 'backend': 'llama-server', 'port': 9337,
-               'models': ls.get('models', []) if ls.get('up') else [],
-               'status': 'up' if ls.get('up') else 'down'}
-        if ls.get('up'):
-            row['last_seen'] = now
-            if ls.get('context_window') is not None:
-                row['context_window'] = ls['context_window']
-        rows.append(row)
-
-        ol = models.get('ollama', {})
-        row = {'hostname': host, 'backend': 'ollama', 'port': 11434,
-               'models': ol.get('models', []) if ol.get('up') else [],
-               'status': 'up' if ol.get('up') else 'down'}
-        if ol.get('up'):
-            row['last_seen'] = now
-            if ol.get('context_window') is not None:
-                row['context_window'] = ol['context_window']
-        rows.append(row)
-
-        ggufs = d.get('ggufs')
-        if ggufs is not None:
-            rows.append({'hostname': host, 'backend': 'ggufs', 'models': ggufs, 'status': 'installed'})
-
-    return rows
+        probed = discoveries[host].get('models', {})
+        for name, key, port in LLM_PROVIDERS:
+            p = probed.get(key, {})
+            provider = LLMProvider(hostname=host, name=name, port=port, status='up' if p.get('up') else 'down')
+            if p.get('up'):
+                provider.last_seen = now
+                provider.context_window = p.get('context_window')
+            providers.append(provider)
+    return providers
 
 
-def build_agent_state(all_rows: list[dict], preserved_buffers: dict[tuple[str, str], int] | None = None) -> list[dict]:
-    if preserved_buffers is None:
-        preserved_buffers = {}
-    rows = []
+def build_llms(discoveries: dict) -> list[LLM]:
+    """One LLM per model a running provider reports."""
+    llms = []
+    for host in sorted(discoveries):
+        probed = discoveries[host].get('models', {})
+        for name, key, _port in LLM_PROVIDERS:
+            p = probed.get(key, {})
+            if p.get('up'):
+                llms += [LLM(hostname=host, provider=name, name=m) for m in p.get('models', [])]
+    return llms
+
+
+def build_ggufs(discoveries: dict) -> list[GGUF]:
+    """One GGUF per file SSH listed; hosts not reached over SSH have none."""
+    now = ts()
+    return [
+        GGUF(hostname=host, name=posixpath.basename(path), path=path, last_seen=now)
+        for host in sorted(discoveries)
+        for path in discoveries[host].get('ggufs') or []
+    ]
+
+
+def build_agents(all_rows: list[dict], preserved_buffers: dict[tuple[str, str], int] | None = None) -> list[Agent]:
+    preserved_buffers = preserved_buffers or {}
+    agents = []
     for row in all_rows:
-        entry = dict(row)
-        buf = preserved_buffers.get((row.get('hostname'), row.get('agent')))
+        agent = Agent.from_dict(row)
+        buf = preserved_buffers.get((agent.hostname, agent.name))
         if buf is not None:
-            entry['reasoning_buffer'] = buf
-        rows.append(entry)
-    return rows
+            agent.reasoning_buffer = buf
+        agents.append(agent)
+    return agents
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -278,13 +290,13 @@ def main() -> None:
         print(f'Topology not found: {path}', file=sys.stderr)
         sys.exit(1)
 
-    data = read_toml(path)
+    data = read_topology_data(path)
     rows = data.get('machines', [])
     if not rows:
         print('No machines table found in topology file.', file=sys.stderr)
         sys.exit(1)
 
-    preserved_buffers = read_existing_agent_reasoning_buffers(data.get('agent_state', []))
+    preserved_buffers = read_existing_agent_reasoning_buffers(data.get('agents', []))
 
     discoveries: dict[str, dict] = {}
     all_agent_rows: list[dict] = []
@@ -318,7 +330,7 @@ def main() -> None:
             parts.append(f"llama-server:{m[0] if m else 'up'}")
         if models['ollama']['up']:
             parts.append(f"ollama:{len(models['ollama']['models'])} models")
-        agent_summary = [f"{a['agent']}:{a['status']}" for a in agents]
+        agent_summary = [f"{a['name']}:{a['status']}" for a in agents]
         print(
             (', '.join(parts) if parts else 'no inference running') +
             (f'  agents={agent_summary}' if agent_summary else '')
@@ -331,8 +343,10 @@ def main() -> None:
                 row.update(hw_updates[host])
 
     data['machines'] = rows
-    data['model_state'] = build_model_state(discoveries)
-    data['agent_state'] = build_agent_state(all_agent_rows, preserved_buffers)
+    data['llm_providers'] = [p.to_dict() for p in build_llm_providers(discoveries)]
+    data['llms'] = [l.to_dict() for l in build_llms(discoveries)]
+    data['agents'] = [a.to_dict() for a in build_agents(all_agent_rows, preserved_buffers)]
+    data['ggufs'] = [g.to_dict() for g in build_ggufs(discoveries)]
 
     write_toml(data, path)
 

@@ -12,7 +12,7 @@ You can either configure your network topology using the tailscale or manual pro
 | Command | What it does |
 |---|---|
 | `/topology` | Reads the topology, shows machines and models, lets you start or swap a running model |
-| `/topology discover` | Probes every machine over SSH and HTTP for GPU/VRAM, GGUF inventory, running backends, and agent endpoints |
+| `/topology discover` | Probes every machine over SSH and HTTP for GPU/VRAM, GGUF inventory, running LLM providers, and agent endpoints |
 | `/topology sync` | Refreshes IPs and online status from the current provider (Tailscale or manual) |
 | `/topology benchmark <hostname> <model>` | Measures TTFT and token throughput over three runs, writes results to `topology.toml` |
 | `/topology show` | Prints the full combined topology plus every sidecar file |

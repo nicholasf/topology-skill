@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import pytest
 
+from topology.models import Topology
 from topology.hooks_install import (
     GOOSE_BEGIN,
     GOOSE_END,
@@ -99,7 +100,7 @@ def test_goose_block_round_trips_and_preserves_other_hints():
 
 def test_goose_install_and_uninstall(tmp_path):
     path = tmp_path / '.goosehints'
-    with patch('topology.hooks_install.load_topology', return_value={'machines': [{'name': 'pond'}]}), \
+    with patch('topology.hooks_install.load_topology', return_value=Topology.from_dict({'machines': [{'name': 'pond', 'hostname': 'pond'}]})), \
          patch('topology.hooks_install.load_playbooks_quietly', return_value={}):
         install('goose', path)
     assert is_installed('goose', path)

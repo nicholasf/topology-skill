@@ -32,27 +32,32 @@ Read the full file.
 
 Display the machines table clearly. Note which machines have `ssh: yes` — these are the ones agents can act on remotely. Note the `last_refreshed` date if present.
 
-## Step 4 — Present available models and live state
+## Step 4 — Present available LLMs and live state
 
-If the topology file contains a `model_state` array, use it as the primary source — it
-reflects the last discover run and shows what is actually installed and running per node,
-including the context window for each backend.
-Present it as a numbered list:
+If the topology file contains `llms` and `llm_providers` arrays, use them as the primary source —
+they reflect the last discover run and show what is actually installed and running per node.
+Each `llms` row names the `hostname` and `provider` serving it; the matching `llm_providers` row
+(same `hostname`, `name` equal to the LLM's `provider`) gives its status, port and context window.
+A provider with no LLMs (down, or serving nothing) still has an `llm_providers` row.
+GGUF files on disk are in the `ggufs` array (`hostname`, `name`, `path`); they are files, not
+running LLMs, so list them separately.
+Present the LLMs as a numbered list:
 
 ```
-Available models:
+Available LLMs:
 
   1. qwen3-coder-30b.gguf  on pond    (llama-server / CUDA, port 9337, ctx 65536) — up
   2. qwen3-coder:30b        on gollum  (Ollama / ROCm,       port 11434, ctx 131072) — up
   3. qwen2.5-coder:14b      on gollum  (Ollama / ROCm,       port 11434, ctx 32768) — up
 ```
 
-If there is no `model_state` array, fall back to any narrative notes in the file,
-or suggest the user run `/topology discover` first.
+If the file has a `model_state` array instead (schema_version 1), it is from before this
+format; suggest the user run `/topology discover`, which upgrades it. If there are no LLM
+arrays at all, fall back to any narrative notes in the file, or suggest `/topology discover`.
 
 ## Step 4b — Present agent state
 
-If the topology file contains an `agent_state` array, present it alongside the models:
+If the topology file contains an `agents` array, present it alongside the LLMs:
 
 ```
 Agents:
@@ -66,7 +71,7 @@ dependent skills (e.g. ask-agent). Read and summarise any that are present.
 
 ## Step 5 — Verify live state if needed
 
-If the user wants a fresh live check beyond what `model_state` shows, run:
+If the user wants a fresh live check beyond what `llm_providers` and `llms` show, run:
 
 ```bash
 curl -s http://<hostname>:9337/v1/models
@@ -125,12 +130,16 @@ When the user says `/topology discover` or "discover topology" or "probe nodes":
    - HTTP: configured agent endpoints (`hermes_gateway`, `goose_acp_url` fields)
    - SSH: pgrep scan for known agent processes (hermes, goose, aider)
 
-3. It writes two arrays into `topology.toml`:
-   - `model_state` — inference backend status, models, context windows, and GGUF inventory per node
-   - `agent_state` — per-node agent liveness and `reasoning_buffer` (preserved from prior runs)
+3. It writes four arrays into `topology.toml` (schema_version 2), upgrading a version 1 file:
+   - `llm_providers` — one row per LLM server per node (ollama, llama-server): status, port,
+     context window
+   - `llms` — one row per LLM, naming the node and provider that serve it
+   - `agents` — one row per agent runtime per node: liveness and `reasoning_buffer`
+     (preserved from prior runs)
+   - `ggufs` — one row per GGUF file found on a node, with its `path`
 
-4. Re-read the topology file and present the updated `model_state` and `agent_state`
-   arrays to the user.
+4. Re-read the topology file and present the updated `llm_providers`, `llms`, `agents` and
+   `ggufs` arrays to the user.
 
 Run discover at the start of a session whenever you need an accurate picture of what is
 actually installed and running, rather than relying on a stale topology.
@@ -232,7 +241,7 @@ as needed — for example:
 
 | skill | array | fields added |
 |---|---|---|
-| `ask-agent-skill` | `machines`, `agent_state` | `hermes_gateway`, `hermes_key_env`, `reasoning_buffer` |
+| `ask-agent-skill` | `machines`, `agents` | `hermes_gateway`, `hermes_key_env`, `reasoning_buffer` |
 
 `hermes_gateway` is the HTTP URL of the Hermes agent server on that node (e.g.
 `http://pond:8642`). `hermes_key_env` is the name of the env var in

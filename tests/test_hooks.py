@@ -10,21 +10,27 @@ from topology.hooks import (
     format_output,
     main,
     match_prompt,
-    model_terms,
+    llm_terms,
     parse_argv,
     read_prompt,
 )
+from topology.models import Topology
 
-TOPOLOGY = {
+TOPOLOGY = Topology.from_dict({
     'machines': [
         {'name': 'pond', 'hostname': 'pond', 'os': 'linux', 'ssh': True},
         {'name': 'hut', 'hostname': 'hut', 'os': 'macOS'},
     ],
-    'model_state': [
-        {'hostname': 'pond', 'backend': 'ollama', 'models': ['qwen3-coder:30b'], 'status': 'up'},
-        {'hostname': 'hut', 'backend': 'llama-server', 'models': [], 'status': 'down'},
+    'llm_providers': [
+        {'hostname': 'pond', 'name': 'ollama', 'status': 'up'},
+        {'hostname': 'hut', 'name': 'llama-server', 'status': 'down'},
     ],
-}
+    'llms': [
+        {'hostname': 'pond', 'provider': 'ollama', 'name': 'qwen3-coder:30b'},
+    ],    'ggufs': [
+        {'hostname': 'pond', 'name': 'qwen-14b-q4.gguf', 'path': '/models/qwen-14b-q4.gguf'},
+    ],
+})
 
 PLAYBOOKS = {
     'start-pond-qwen': {
@@ -45,10 +51,10 @@ def test_contains_term_matches_whole_words_case_insensitively():
     assert not contains_term('pond-side', 'pond')
 
 
-def test_model_terms_include_base_name_but_not_generic_parts():
-    assert model_terms('qwen3-coder:30b') == {'qwen3-coder:30b', 'qwen3-coder'}
-    assert model_terms('foo-7b.gguf') == {'foo-7b.gguf', 'foo-7b'}
-    assert model_terms('abc:latest') == {'abc:latest'}
+def test_llm_terms_include_base_name_but_not_generic_parts():
+    assert llm_terms('qwen3-coder:30b') == {'qwen3-coder:30b', 'qwen3-coder'}
+    assert llm_terms('foo-7b.gguf') == {'foo-7b.gguf', 'foo-7b'}
+    assert llm_terms('abc:latest') == {'abc:latest'}
 
 
 # ── prompt matching ──────────────────────────────────────────────────────────
@@ -66,9 +72,9 @@ def test_match_prompt_reports_host_and_playbooks_targeting_it():
     assert 'start-pond-qwen' in text
 
 
-def test_match_prompt_reports_model_location():
+def test_match_prompt_reports_llm_location():
     text = '\n'.join(match_prompt('which box has qwen3-coder?', TOPOLOGY, PLAYBOOKS))
-    assert 'Model qwen3-coder:30b is on pond (ollama, up' in text
+    assert 'LLM qwen3-coder:30b is on pond (ollama, up' in text
 
 
 def test_match_prompt_is_empty_for_unrelated_prompt():
@@ -81,12 +87,12 @@ def test_match_prompt_ignores_bare_topology_and_playbook_words():
 
 def test_match_prompt_skips_slash_commands_and_missing_topology():
     assert match_prompt('/topology show pond', TOPOLOGY, PLAYBOOKS) == []
-    assert match_prompt('is pond up?', {}, PLAYBOOKS) == []
+    assert match_prompt('is pond up?', None, PLAYBOOKS) == []
 
 
 # ── summary ──────────────────────────────────────────────────────────────────
 
-def test_build_summary_lists_machines_running_models_and_playbooks():
+def test_build_summary_lists_machines_running_llms_and_playbooks():
     text = build_summary(TOPOLOGY, PLAYBOOKS)
     assert 'Machines: pond (ssh), hut' in text
     assert 'pond ollama: qwen3-coder:30b' in text
@@ -96,7 +102,7 @@ def test_build_summary_lists_machines_running_models_and_playbooks():
 
 
 def test_build_summary_is_empty_without_topology():
-    assert build_summary({}, PLAYBOOKS) == ''
+    assert build_summary(None, PLAYBOOKS) == ''
 
 
 # ── I/O formats ──────────────────────────────────────────────────────────────
@@ -139,3 +145,29 @@ def test_main_swallows_errors_and_prints_nothing(capsys):
     captured = capsys.readouterr()
     assert captured.out == ''
     assert 'boom' in captured.err
+
+
+def test_load_topology_reads_a_v1_file_as_llms(tmp_path, monkeypatch):
+    from topology import hooks
+    from topology.toml_io import write_toml
+    path = tmp_path / 'topology.toml'
+    write_toml({
+        'schema_version': 1,
+        'machines': [{'name': 'pond', 'hostname': 'pond'}],
+        'model_state': [{'hostname': 'pond', 'backend': 'ollama', 'models': ['qwen3-coder:30b'], 'status': 'up'}],
+    }, str(path))
+    monkeypatch.setattr(hooks, 'get_topology_path', lambda: str(path))
+    topology = hooks.load_topology()
+    assert [l.name for l in topology.llms] == ['qwen3-coder:30b']
+    assert 'pond ollama: qwen3-coder:30b' in build_summary(topology, {})
+
+
+def test_load_topology_is_none_without_a_file(tmp_path, monkeypatch):
+    from topology import hooks
+    monkeypatch.setattr(hooks, 'get_topology_path', lambda: str(tmp_path / 'missing.toml'))
+    assert hooks.load_topology() is None
+
+
+def test_prompt_mentioning_gguf_file_gets_a_file_hint():
+    hints = match_prompt('load qwen-14b-q4 into llama-server', TOPOLOGY, {})
+    assert 'GGUF qwen-14b-q4.gguf is on pond (on disk at /models/qwen-14b-q4.gguf).' in hints

@@ -4,6 +4,7 @@ from unittest.mock import patch
 import pytest
 
 from topology.hooks import main
+from topology.models import Topology
 from topology.resolve_notation import (
     build_expanded_form,
     expand,
@@ -13,15 +14,20 @@ from topology.resolve_notation import (
     read_skill_name,
 )
 
-TOPOLOGY = {
+TOPOLOGY = Topology.from_dict({
     'machines': [
         {'name': 'pond', 'hostname': 'pond', 'os': 'linux', 'ssh': True},
         {'name': 'hut', 'hostname': 'hut', 'os': 'macOS'},
     ],
-    'model_state': [
-        {'hostname': 'pond', 'backend': 'ollama', 'models': ['qwen3-coder:30b'], 'status': 'up'},
+    'llm_providers': [
+        {'hostname': 'pond', 'name': 'ollama', 'status': 'up'},
     ],
-}
+    'llms': [
+        {'hostname': 'pond', 'provider': 'ollama', 'name': 'qwen3-coder:30b'},
+    ],    'ggufs': [
+        {'hostname': 'pond', 'name': 'qwen-14b-q4.gguf', 'path': '/models/qwen-14b-q4.gguf'},
+    ],
+})
 
 PLAYBOOKS = {
     'start-pond-qwen': {
@@ -95,10 +101,21 @@ def test_expand_host():
     assert 'Playbooks targeting it: start-pond-qwen.' in text
 
 
-def test_expand_model_by_base_name():
+def test_expand_llm_by_base_name():
     tag, kind, text = expand('qwen3-coder', TOPOLOGY, PLAYBOOKS)
-    assert (tag, kind) == ('expanded', 'model')
-    assert 'Model qwen3-coder:30b is on pond' in text
+    assert (tag, kind) == ('expanded', 'llm')
+    assert 'LLM qwen3-coder:30b is on pond' in text
+
+
+def test_expand_gguf_by_file_or_base_name():
+    for payload in ('qwen-14b-q4.gguf', 'qwen-14b-q4'):
+        tag, kind, text = expand(payload, TOPOLOGY, PLAYBOOKS)
+        assert (tag, kind) == ('expanded', 'gguf')
+        assert text == 'GGUF qwen-14b-q4.gguf is on pond (on disk at /models/qwen-14b-q4.gguf).'
+
+
+def test_expand_host_lists_its_gguf_files():
+    assert 'GGUF files: qwen-14b-q4.gguf.' in expand('pond', TOPOLOGY, PLAYBOOKS)[2]
 
 
 def test_expand_playbook_by_name_and_alias():
@@ -123,7 +140,7 @@ def test_expand_unknown_handle_suggests():
 
 
 def test_expand_without_topology_is_error():
-    assert expand('pond', {}, PLAYBOOKS)[0] == 'error'
+    assert expand('pond', None, PLAYBOOKS)[0] == 'error'
 
 
 # ── expanded form ────────────────────────────────────────────────────────────
@@ -198,10 +215,11 @@ def test_encode_payload_uses_plus_for_spaces_and_keeps_colons():
     assert encode_payload('qwen3-coder:30b') == 'qwen3-coder:30b'
 
 
-def test_completion_items_cover_hosts_models_playbooks_and_aliases():
+def test_completion_items_cover_hosts_llms_playbooks_and_aliases():
     values = {i['value']: i['description'] for i in completion_items(TOPOLOGY, PLAYBOOKS)}
     assert values['pond'] == 'host: linux, ssh'
-    assert values['qwen3-coder:30b'] == 'model on pond (ollama, up)'
+    assert values['qwen3-coder:30b'] == 'llm on pond (ollama, up)'
+    assert values['qwen-14b-q4.gguf'] == 'gguf on pond (on disk)'
     assert values['start-pond-qwen'] == 'playbook: Start qwen on pond'
     assert values['wake+pond+up'] == 'alias of playbook start-pond-qwen'
 
