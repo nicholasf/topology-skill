@@ -30,7 +30,7 @@ def write_topology(provider: str, machines: list[dict], topology_path: str) -> N
     os.makedirs(os.path.dirname(topology_path), exist_ok=True)
     data = {
         'schema_version': SCHEMA_VERSION,
-        'provider': provider,
+        'network': provider,
         'last_refreshed': datetime.now().strftime('%Y-%m-%dT%H-%M-%S'),
         'machines': machines,
     }

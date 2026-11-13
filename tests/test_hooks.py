@@ -21,12 +21,14 @@ TOPOLOGY = Topology.from_dict({
         {'name': 'pond', 'hostname': 'pond', 'os': 'linux', 'ssh': True},
         {'name': 'hut', 'hostname': 'hut', 'os': 'macOS'},
     ],
-    'backends': [
+    'llm_providers': [
         {'hostname': 'pond', 'name': 'ollama', 'status': 'up'},
         {'hostname': 'hut', 'name': 'llama-server', 'status': 'down'},
     ],
     'llms': [
-        {'hostname': 'pond', 'backend': 'ollama', 'name': 'qwen3-coder:30b'},
+        {'hostname': 'pond', 'provider': 'ollama', 'name': 'qwen3-coder:30b'},
+    ],    'ggufs': [
+        {'hostname': 'pond', 'name': 'qwen-14b-q4.gguf', 'path': '/models/qwen-14b-q4.gguf'},
     ],
 })
 
@@ -164,3 +166,8 @@ def test_load_topology_is_none_without_a_file(tmp_path, monkeypatch):
     from topology import hooks
     monkeypatch.setattr(hooks, 'get_topology_path', lambda: str(tmp_path / 'missing.toml'))
     assert hooks.load_topology() is None
+
+
+def test_prompt_mentioning_gguf_file_gets_a_file_hint():
+    hints = match_prompt('load qwen-14b-q4 into llama-server', TOPOLOGY, {})
+    assert 'GGUF qwen-14b-q4.gguf is on pond (on disk at /models/qwen-14b-q4.gguf).' in hints

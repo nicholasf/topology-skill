@@ -12,9 +12,9 @@ LLMs, playbooks and how to call the CLI. It is meant to be added once, at
 the start of a session.
 
 prompt reads the user's prompt and prints a targeted hint only when it
-mentions a topology host, a known LLM or a playbook alias. Otherwise it
-prints nothing, so unrelated prompts add
-nothing to the context window. If the prompt contains skill notations
+mentions a topology host, a known LLM or GGUF file, or a playbook alias.
+Otherwise it prints nothing, so unrelated prompts add nothing to the
+context window. If the prompt contains skill notations
 (`^top:pond`, see resolve_notation.py), it prints their expanded forms instead.
 
 --format claude reads Claude Code's hook JSON on stdin and writes
@@ -31,7 +31,7 @@ import os
 import re
 import sys
 
-from .models import LLM, Backend, Topology, read_topology
+from .models import LLM, LLMProvider, Topology, read_topology
 from .playbook import PlaybookError, get_topologies_home, load_playbooks, normalize_phrase
 from .sync import get_topology_path
 
@@ -62,20 +62,20 @@ def playbook_hosts(playbook: dict) -> set[str]:
     return {t['hosts'] for t in playbook['tasks'] if 'hosts' in t}
 
 
-def running_backends(topology: Topology) -> list[tuple[Backend, list[LLM]]]:
-    """Each backend that is up and serves at least one LLM, with those LLMs."""
+def running_providers(topology: Topology) -> list[tuple[LLMProvider, list[LLM]]]:
+    """Each LLM provider that is up and serves at least one LLM, with those LLMs."""
     running = []
-    for backend in topology.backends:
-        llms = topology.llms_on(backend.hostname, backend.name)
-        if backend.status == 'up' and llms:
-            running.append((backend, llms))
+    for provider in topology.llm_providers:
+        llms = topology.llms_on(provider.hostname, provider.name)
+        if provider.status == 'up' and llms:
+            running.append((provider, llms))
     return running
 
 
 def llm_status(topology: Topology, llm: LLM) -> str:
-    """The status of the backend serving an LLM, or 'unknown' if it has no backend row."""
-    backend = topology.backend_of(llm)
-    return backend.status if backend else 'unknown'
+    """The status of the provider serving an LLM, or 'unknown' if it has no provider row."""
+    provider = topology.provider_of(llm)
+    return provider.status if provider else 'unknown'
 
 
 # ── Session-start summary ────────────────────────────────────────────────────
@@ -94,11 +94,11 @@ def build_summary(topology: Topology | None, playbooks: dict[str, dict]) -> str:
         names = [m.name + (' (ssh)' if m.ssh else '') for m in topology.machines if m.name]
         lines.append('Machines: ' + ', '.join(names))
 
-    running = running_backends(topology)
+    running = running_providers(topology)
     if running:
         lines.append('LLMs running at last discover:')
-        for backend, llms in running:
-            lines.append(f"  {backend.hostname} {backend.name}: {', '.join(l.name for l in llms)}")
+        for provider, llms in running:
+            lines.append(f"  {provider.hostname} {provider.name}: {', '.join(l.name for l in llms)}")
 
     if playbooks:
         lines.append('Playbooks (run with: topology run "<alias>"):')
@@ -111,7 +111,7 @@ def build_summary(topology: Topology | None, playbooks: dict[str, dict]) -> str:
     from .resolve_notation import read_notation_key  # imported here: resolve_notation imports this module
     key = read_notation_key()
     lines.append(
-        f'Notation: {key} or {key}:<machine|llm|playbook> in the user\'s message is followed by '
+        f'Notation: {key} or {key}:<machine|llm|gguf|playbook> in the user\'s message is followed by '
         '<skill-notation> blocks, each pairing the notation with its expanded form.'
     )
     return '\n'.join(lines)
@@ -170,8 +170,12 @@ def match_prompt(prompt: str, topology: Topology | None, playbooks: dict[str, di
         if any(contains_term(prompt, t) for t in llm_terms(llm.name)):
             hints.append(
                 f'LLM {llm.name} is on {llm.hostname} '
-                f'({llm.backend}, {llm_status(topology, llm)} at last discover).'
+                f'({llm.provider}, {llm_status(topology, llm)} at last discover).'
             )
+
+    for gguf in topology.ggufs:
+        if any(contains_term(prompt, t) for t in llm_terms(gguf.name)):
+            hints.append(f'GGUF {gguf.name} is on {gguf.hostname} (on disk at {gguf.path}).')
 
     if not hints:
         return []

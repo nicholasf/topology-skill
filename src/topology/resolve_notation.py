@@ -37,8 +37,10 @@ says so.
 
 Payloads this skill understands:
   (none)            ^top                    the topology summary
-  machine           ^top:pond               host details, backends and LLMs, playbooks targeting it
+  machine           ^top:pond               host details, LLM providers and LLMs, GGUF files,
+                                            playbooks targeting it
   llm               ^top:qwen3-coder        where the LLM is running
+  gguf              ^top:qwen-14b.gguf      where the GGUF file is
   playbook          ^top:start-pond-qwen    playbook details and how to run it
                     ^top:wake+pond+up       (a playbook alias works too)
 Anything else gives <error> with suggestions.
@@ -147,9 +149,12 @@ def describe_machine(machine: Machine, topology: Topology, playbooks: dict[str, 
     name = machine.name
     names = {name, machine.hostname} - {''}
     parts = [f'Host {name}: {machine.os or "unknown os"}, {"ssh" if machine.ssh else "no ssh"}.']
-    for backend in topology.backends_on(machine.hostname):
-        llms = ', '.join(l.name for l in topology.llms_on(machine.hostname, backend.name)) or 'no LLMs'
-        parts.append(f'{backend.name} ({backend.status} at last discover): {llms}.')
+    for provider in topology.llm_providers_on(machine.hostname):
+        llms = ', '.join(l.name for l in topology.llms_on(machine.hostname, provider.name)) or 'no LLMs'
+        parts.append(f'{provider.name} ({provider.status} at last discover): {llms}.')
+    ggufs = topology.ggufs_on(machine.hostname)
+    if ggufs:
+        parts.append('GGUF files: ' + ', '.join(g.name for g in ggufs) + '.')
     related = [pb['name'] for pb in playbooks.values() if names & playbook_hosts(pb)]
     if related:
         parts.append('Playbooks targeting it: ' + ', '.join(related) + '.')
@@ -177,6 +182,8 @@ def all_handles(topology: Topology, playbooks: dict[str, dict]) -> list[str]:
         handles |= {m.name, m.hostname}
     for llm in topology.llms:
         handles |= llm_terms(llm.name)
+    for gguf in topology.ggufs:
+        handles |= llm_terms(gguf.name)
     for pb in playbooks.values():
         handles |= {pb['name'], *pb['aliases']}
     return sorted(handles - {''})
@@ -200,9 +207,14 @@ def expand(payload: str, topology: Topology | None, playbooks: dict[str, dict]) 
     for llm in topology.llms:
         if wanted in {t.lower() for t in llm_terms(llm.name)}:
             llm_lines.append(f'LLM {llm.name} is on {llm.hostname} '
-                             f'({llm.backend}, {llm_status(topology, llm)} at last discover).')
+                             f'({llm.provider}, {llm_status(topology, llm)} at last discover).')
     if llm_lines:
         descriptions.append(('llm', ' '.join(llm_lines)))
+
+    gguf_lines = [f'GGUF {g.name} is on {g.hostname} (on disk at {g.path}).'
+                  for g in topology.ggufs if wanted in {t.lower() for t in llm_terms(g.name)}]
+    if gguf_lines:
+        descriptions.append(('gguf', ' '.join(gguf_lines)))
 
     name = payload if payload in playbooks else resolve_alias(payload, playbooks)
     if name:
@@ -275,7 +287,9 @@ def completion_items(topology: Topology | None, playbooks: dict[str, dict]) -> l
         for machine in topology.machines:
             add(machine.name, f'host: {machine.os or "unknown os"}, {"ssh" if machine.ssh else "no ssh"}')
         for llm in topology.llms:
-            add(llm.name, f'llm on {llm.hostname} ({llm.backend}, {llm_status(topology, llm)})')
+            add(llm.name, f'llm on {llm.hostname} ({llm.provider}, {llm_status(topology, llm)})')
+        for gguf in topology.ggufs:
+            add(gguf.name, f'gguf on {gguf.hostname} (on disk)')
     for pb in playbooks.values():
         summary = pb.get('description', '') or 'playbook'
         add(pb['name'], f'playbook: {summary}')
@@ -288,7 +302,7 @@ def build_completion(topology: Topology | None, playbooks: dict[str, dict]) -> d
     return {
         'key': read_notation_key(),
         'skill': read_skill_name(),
-        'description': 'machines, LLMs and playbooks in the home-lab topology',
+        'description': 'machines, LLMs, GGUF files and playbooks in the home-lab topology',
         'handles': completion_items(topology, playbooks),
     }
 

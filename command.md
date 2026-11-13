@@ -34,11 +34,13 @@ Display the machines table clearly. Note which machines have `ssh: yes` — thes
 
 ## Step 4 — Present available LLMs and live state
 
-If the topology file contains `llms` and `backends` arrays, use them as the primary source —
+If the topology file contains `llms` and `llm_providers` arrays, use them as the primary source —
 they reflect the last discover run and show what is actually installed and running per node.
-Each `llms` row names the `hostname` and `backend` serving it; the matching `backends` row
-(same `hostname`, `name` equal to the LLM's `backend`) gives its status, port and context window.
-A backend with no LLMs (down, or serving nothing) still has a `backends` row.
+Each `llms` row names the `hostname` and `provider` serving it; the matching `llm_providers` row
+(same `hostname`, `name` equal to the LLM's `provider`) gives its status, port and context window.
+A provider with no LLMs (down, or serving nothing) still has an `llm_providers` row.
+GGUF files on disk are in the `ggufs` array (`hostname`, `name`, `path`); they are files, not
+running LLMs, so list them separately.
 Present the LLMs as a numbered list:
 
 ```
@@ -69,7 +71,7 @@ dependent skills (e.g. ask-agent). Read and summarise any that are present.
 
 ## Step 5 — Verify live state if needed
 
-If the user wants a fresh live check beyond what `backends` and `llms` show, run:
+If the user wants a fresh live check beyond what `llm_providers` and `llms` show, run:
 
 ```bash
 curl -s http://<hostname>:9337/v1/models
@@ -128,15 +130,16 @@ When the user says `/topology discover` or "discover topology" or "probe nodes":
    - HTTP: configured agent endpoints (`hermes_gateway`, `goose_acp_url` fields)
    - SSH: pgrep scan for known agent processes (hermes, goose, aider)
 
-3. It writes three arrays into `topology.toml` (schema_version 2), upgrading a version 1 file:
-   - `backends` — one row per inference server per node (ollama, llama-server, and `ggufs` for
-     GGUF files on disk): status, port, context window
-   - `llms` — one row per LLM, naming the node and backend that serve it
+3. It writes four arrays into `topology.toml` (schema_version 2), upgrading a version 1 file:
+   - `llm_providers` — one row per LLM server per node (ollama, llama-server): status, port,
+     context window
+   - `llms` — one row per LLM, naming the node and provider that serve it
    - `agents` — one row per agent runtime per node: liveness and `reasoning_buffer`
      (preserved from prior runs)
+   - `ggufs` — one row per GGUF file found on a node, with its `path`
 
-4. Re-read the topology file and present the updated `backends`, `llms` and `agents`
-   arrays to the user.
+4. Re-read the topology file and present the updated `llm_providers`, `llms`, `agents` and
+   `ggufs` arrays to the user.
 
 Run discover at the start of a session whenever you need an accurate picture of what is
 actually installed and running, rather than relying on a stale topology.

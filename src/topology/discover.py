@@ -10,23 +10,25 @@ Probes every machine in the machines table:
   - HTTP:  configured agent endpoints (hermes_gateway, goose_acp_url keys)
   - SSH:   pgrep scan for known agent processes
 
-Writes/replaces three arrays in topology.toml (schema_version 2, see models.py):
-  backends  — one row per inference server per node: status, port, context window
-  llms      — one row per LLM, naming the node and backend that serve it
-  agents    — one row per agent runtime per node: liveness and reasoning_buffer
+Writes/replaces four arrays in topology.toml (schema_version 2, see models.py):
+  llm_providers  — one row per LLM server per node: status, port, context window
+  llms           — one row per LLM, naming the node and provider that serve it
+  agents         — one row per agent runtime per node: liveness and reasoning_buffer
+  ggufs          — one row per GGUF file found on a node over SSH
 
 A schema_version 1 file (model_state / agent_state) is upgraded on write.
 """
 
 import json
 import os
+import posixpath
 import subprocess
 import sys
 import urllib.error
 import urllib.request
 from datetime import datetime
 
-from .models import LLM, Agent, Backend, read_topology_data
+from .models import GGUF, GGUF_DIR, LLM, Agent, LLMProvider, read_topology_data
 from .sync import get_topology_path
 from .toml_io import write_toml
 
@@ -158,8 +160,8 @@ def discover_hardware(host: str, user: str, os_name: str) -> dict:
 
 
 def list_ggufs(host: str, user: str) -> list[str]:
-    out = ssh_run(host, user,
-        "ls ~/.local/share/gguf/*.gguf 2>/dev/null | xargs -I{} basename {} 2>/dev/null")
+    """Full paths of the GGUF files in GGUF_DIR on a host."""
+    out = ssh_run(host, user, f"ls -1 {GGUF_DIR}/*.gguf 2>/dev/null")
     if not out:
         return []
     return [f.strip() for f in out.splitlines() if f.strip()]
@@ -226,41 +228,46 @@ def probe_agents(host: str, user: str | None, row: dict) -> list[dict]:
 
 # ── Section builders ──────────────────────────────────────────────────────────
 
-# Each server backend: (name in topology.toml, key in probe_models output, port).
-SERVER_BACKENDS = [('llama-server', 'llama_server', 9337), ('ollama', 'ollama', 11434)]
+# Each LLM provider: (name in topology.toml, key in probe_models output, port).
+LLM_PROVIDERS = [('llama-server', 'llama_server', 9337), ('ollama', 'ollama', 11434)]
 
 
-def build_backends(discoveries: dict) -> list[Backend]:
-    """One Backend per server per host, up or down, plus ggufs where SSH listed them."""
-    backends = []
+def build_llm_providers(discoveries: dict) -> list[LLMProvider]:
+    """One LLMProvider per server per host, up or down."""
+    providers = []
     now = ts()
     for host in sorted(discoveries):
-        d = discoveries[host]
-        probed = d.get('models', {})
-        for name, key, port in SERVER_BACKENDS:
+        probed = discoveries[host].get('models', {})
+        for name, key, port in LLM_PROVIDERS:
             p = probed.get(key, {})
-            backend = Backend(hostname=host, name=name, port=port, status='up' if p.get('up') else 'down')
+            provider = LLMProvider(hostname=host, name=name, port=port, status='up' if p.get('up') else 'down')
             if p.get('up'):
-                backend.last_seen = now
-                backend.context_window = p.get('context_window')
-            backends.append(backend)
-        if d.get('ggufs') is not None:
-            backends.append(Backend(hostname=host, name='ggufs', status='installed'))
-    return backends
+                provider.last_seen = now
+                provider.context_window = p.get('context_window')
+            providers.append(provider)
+    return providers
 
 
 def build_llms(discoveries: dict) -> list[LLM]:
-    """One LLM per model a running server reports, and per GGUF file found on disk."""
+    """One LLM per model a running provider reports."""
     llms = []
     for host in sorted(discoveries):
-        d = discoveries[host]
-        probed = d.get('models', {})
-        for name, key, _port in SERVER_BACKENDS:
+        probed = discoveries[host].get('models', {})
+        for name, key, _port in LLM_PROVIDERS:
             p = probed.get(key, {})
             if p.get('up'):
-                llms += [LLM(hostname=host, backend=name, name=m) for m in p.get('models', [])]
-        llms += [LLM(hostname=host, backend='ggufs', name=f) for f in d.get('ggufs') or []]
+                llms += [LLM(hostname=host, provider=name, name=m) for m in p.get('models', [])]
     return llms
+
+
+def build_ggufs(discoveries: dict) -> list[GGUF]:
+    """One GGUF per file SSH listed; hosts not reached over SSH have none."""
+    now = ts()
+    return [
+        GGUF(hostname=host, name=posixpath.basename(path), path=path, last_seen=now)
+        for host in sorted(discoveries)
+        for path in discoveries[host].get('ggufs') or []
+    ]
 
 
 def build_agents(all_rows: list[dict], preserved_buffers: dict[tuple[str, str], int] | None = None) -> list[Agent]:
@@ -336,9 +343,10 @@ def main() -> None:
                 row.update(hw_updates[host])
 
     data['machines'] = rows
-    data['backends'] = [b.to_dict() for b in build_backends(discoveries)]
+    data['llm_providers'] = [p.to_dict() for p in build_llm_providers(discoveries)]
     data['llms'] = [l.to_dict() for l in build_llms(discoveries)]
     data['agents'] = [a.to_dict() for a in build_agents(all_agent_rows, preserved_buffers)]
+    data['ggufs'] = [g.to_dict() for g in build_ggufs(discoveries)]
 
     write_toml(data, path)
 

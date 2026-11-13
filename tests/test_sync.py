@@ -1,6 +1,6 @@
 import os
 
-from topology.sync import get_topology_path, merge, read_provider
+from topology.sync import get_topology_path, merge, read_network
 
 
 def discovered(hostname, tailscale_ip='100.1.2.3', os_name='Linux', online=True, is_self=False):
@@ -19,22 +19,22 @@ def test_get_topology_path_defaults_when_unset(monkeypatch):
     assert get_topology_path() == os.path.expanduser('~/.agents/skills/topology.toml')
 
 
-# -- read_provider --
+# -- read_network --
 
-def test_read_provider_detects_manual():
-    assert read_provider({'provider': 'manual'}) == 'manual'
-
-
-def test_read_provider_detects_tailscale():
-    assert read_provider({'provider': 'tailscale'}) == 'tailscale'
+def test_read_network_detects_manual():
+    assert read_network({'network': 'manual'}) == 'manual'
 
 
-def test_read_provider_defaults_to_tailscale_when_absent():
-    assert read_provider({}) == 'tailscale'
+def test_read_network_detects_tailscale():
+    assert read_network({'network': 'tailscale'}) == 'tailscale'
 
 
-def test_read_provider_is_case_insensitive():
-    assert read_provider({'provider': 'Manual'}) == 'manual'
+def test_read_network_defaults_to_tailscale_when_absent():
+    assert read_network({}) == 'tailscale'
+
+
+def test_read_network_is_case_insensitive():
+    assert read_network({'network': 'Manual'}) == 'manual'
 
 
 # -- merge --

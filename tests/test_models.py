@@ -3,14 +3,17 @@ import tomllib
 import pytest
 
 from topology.models import (
+    GGUF,
     LLM,
     SCHEMA_VERSION,
     Agent,
-    Backend,
     Benchmark,
     FailureReport,
+    FileResource,
+    LLMProvider,
     Machine,
     Playbook,
+    Server,
     Task,
     Topology,
     upgrade_v1,
@@ -19,7 +22,7 @@ from topology.toml_io import read_toml, write_toml
 
 TOPOLOGY = {
     'schema_version': 2,
-    'provider': 'tailscale',
+    'network': 'tailscale',
     'last_refreshed': '2026-08-21T10-02-21',
     'machines': [
         {'name': 'pond', 'hostname': 'pond', 'tailscale_ip': '100.0.0.1', 'local_ip': '192.168.1.2',
@@ -27,20 +30,22 @@ TOPOLOGY = {
          'last_verified': '2026-08-31', 'goose_acp_url': 'ws://pond:3284'},
         {'name': 'hut', 'hostname': 'hut', 'local_ip': '192.168.1.3'},
     ],
-    'backends': [
+    'llm_providers': [
         {'hostname': 'pond', 'name': 'ollama', 'status': 'up', 'port': 11434,
          'context_window': 32768, 'last_seen': '2026-11-10T01-00-00'},
-        {'hostname': 'pond', 'name': 'ggufs', 'status': 'installed'},
         {'hostname': 'hut', 'name': 'llama-server', 'status': 'down', 'port': 9337},
     ],
     'llms': [
-        {'hostname': 'pond', 'backend': 'ollama', 'name': 'qwen2.5-coder:7b'},
-        {'hostname': 'pond', 'backend': 'ollama', 'name': 'qwen2.5-coder:14b'},
-        {'hostname': 'pond', 'backend': 'ggufs', 'name': 'qwen.gguf'},
+        {'hostname': 'pond', 'provider': 'ollama', 'name': 'qwen2.5-coder:7b'},
+        {'hostname': 'pond', 'provider': 'ollama', 'name': 'qwen2.5-coder:14b'},
     ],
     'agents': [
         {'hostname': 'pond', 'name': 'goose', 'status': 'down', 'endpoint': 'ws://pond:3284',
          'process': 'not found', 'reasoning_buffer': 12000},
+    ],
+    'ggufs': [
+        {'hostname': 'pond', 'name': 'qwen.gguf', 'path': '/home/me/.local/share/gguf/qwen.gguf',
+         'last_seen': '2026-11-10T01-00-00'},
     ],
     'benchmarks': [
         {'hostname': 'pond', 'llm': 'qwen2.5-coder:7b', 'timestamp': '2026-06-11T19-02-45',
@@ -65,9 +70,10 @@ PLAYBOOK = {
 def test_topology_round_trips():
     topology = Topology.from_dict(TOPOLOGY)
     assert isinstance(topology.machines[0], Machine)
-    assert isinstance(topology.backends[0], Backend)
+    assert isinstance(topology.llm_providers[0], LLMProvider)
     assert isinstance(topology.llms[0], LLM)
     assert isinstance(topology.agents[0], Agent)
+    assert isinstance(topology.ggufs[0], GGUF)
     assert isinstance(topology.benchmarks[0], Benchmark)
     assert topology.to_dict() == TOPOLOGY
 
@@ -83,31 +89,35 @@ def test_new_topology_is_current_schema_version():
     assert Topology().to_dict()['schema_version'] == SCHEMA_VERSION
 
 
-def test_backend_without_port_or_llms_is_kept():
+def test_provider_serving_no_llms_is_kept():
     topology = Topology.from_dict(TOPOLOGY)
-    down = topology.backends_on('hut')
-    assert [b.name for b in down] == ['llama-server']
+    assert [p.name for p in topology.llm_providers_on('hut')] == ['llama-server']
     assert topology.llms_on('hut') == []
-    ggufs = Backend.from_dict(TOPOLOGY['backends'][1])
-    assert ggufs.port is None
-    assert 'port' not in ggufs.to_dict()
 
 
-def test_lookups_follow_hostname_and_backend():
+def test_servers_and_file_resources_are_separate_families():
+    assert issubclass(LLMProvider, Server) and issubclass(Agent, Server)
+    assert issubclass(GGUF, FileResource)
+    assert not issubclass(GGUF, Server)
+
+
+def test_lookups_follow_hostname_and_provider():
     topology = Topology.from_dict(TOPOLOGY)
     assert topology.machine('pond').ssh_user == 'me'
     assert topology.machine('nowhere') is None
-    assert [b.name for b in topology.backends_on('pond')] == ['ollama', 'ggufs']
+    assert [p.name for p in topology.llm_providers_on('pond')] == ['ollama']
     assert [l.name for l in topology.llms_on('pond', 'ollama')] == ['qwen2.5-coder:7b', 'qwen2.5-coder:14b']
-    assert len(topology.llms_on('pond')) == 3
+    assert len(topology.llms_on('pond')) == 2
     assert [a.name for a in topology.agents_on('pond')] == ['goose']
+    assert [g.name for g in topology.ggufs_on('pond')] == ['qwen.gguf']
+    assert [type(s) for s in topology.servers_on('pond')] == [LLMProvider, Agent]
     llm = topology.llms[0]
-    assert topology.backend_of(llm).context_window == 32768
+    assert topology.provider_of(llm).context_window == 32768
     assert [b.tok_s for b in topology.benchmarks_for(llm)] == [12.7]
 
 
 def test_rows_for_unknown_hosts_are_kept():
-    data = {**TOPOLOGY, 'llms': [*TOPOLOGY['llms'], {'hostname': 'ghost', 'backend': 'ollama', 'name': 'x'}]}
+    data = {**TOPOLOGY, 'llms': [*TOPOLOGY['llms'], {'hostname': 'ghost', 'provider': 'ollama', 'name': 'x'}]}
     topology = Topology.from_dict(data)
     assert topology.machine('ghost') is None
     assert topology.to_dict() == data
@@ -120,7 +130,7 @@ def test_unknown_keys_are_kept_in_extra():
 
 
 def test_missing_required_field_raises():
-    with pytest.raises(ValueError, match='LLM is missing backend'):
+    with pytest.raises(ValueError, match='LLM is missing provider'):
         LLM.from_dict({'hostname': 'pond', 'name': 'x'})
 
 
@@ -146,21 +156,31 @@ V1 = {
 }
 
 
-def test_upgrade_v1_splits_backends_and_llms():
+def test_upgrade_v1_splits_providers_and_llms():
     data = upgrade_v1(V1)
     assert data['schema_version'] == 2
     assert 'model_state' not in data and 'agent_state' not in data
-    assert data['backends'] == [
+    assert data['llm_providers'] == [
         {'hostname': 'pond', 'name': 'ollama', 'port': 11434, 'status': 'up',
          'context_window': 32768, 'last_seen': 't'},
         {'hostname': 'pond', 'name': 'llama-server', 'port': 9337, 'status': 'down'},
-        {'hostname': 'pond', 'name': 'ggufs', 'status': 'installed'},
     ]
     assert data['llms'] == [
-        {'hostname': 'pond', 'backend': 'ollama', 'name': 'a'},
-        {'hostname': 'pond', 'backend': 'ollama', 'name': 'b'},
-        {'hostname': 'pond', 'backend': 'ggufs', 'name': 'c.gguf'},
+        {'hostname': 'pond', 'provider': 'ollama', 'name': 'a'},
+        {'hostname': 'pond', 'provider': 'ollama', 'name': 'b'},
     ]
+
+
+def test_upgrade_v1_turns_ggufs_row_into_files():
+    assert upgrade_v1(V1)['ggufs'] == [
+        {'hostname': 'pond', 'name': 'c.gguf', 'path': '~/.local/share/gguf/c.gguf'},
+    ]
+
+
+def test_upgrade_v1_renames_provider_to_network():
+    data = upgrade_v1(V1)
+    assert data['network'] == 'tailscale'
+    assert 'provider' not in data
 
 
 def test_upgrade_v1_renames_agent_and_benchmark_keys():

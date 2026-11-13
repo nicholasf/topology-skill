@@ -66,12 +66,11 @@ def build_world(root: Path) -> dict[str, str]:
     topologies = root / 'topologies'
     topologies.mkdir()
     write_toml({
-        'schema_version': 1,
-        'provider': 'manual',
-        'machines': [{'name': 'pond', 'hostname': 'pond', 'os': 'linux', 'ssh': True}],
         'schema_version': 2,
-        'backends': [{'hostname': 'pond', 'name': 'ollama', 'port': 11434, 'status': 'up'}],
-        'llms': [{'hostname': 'pond', 'backend': 'ollama', 'name': 'qwen3-coder:30b'}],
+        'network': 'manual',
+        'machines': [{'name': 'pond', 'hostname': 'pond', 'os': 'linux', 'ssh': True}],
+        'llm_providers': [{'hostname': 'pond', 'name': 'ollama', 'port': 11434, 'status': 'up'}],
+        'llms': [{'hostname': 'pond', 'provider': 'ollama', 'name': 'qwen3-coder:30b'}],
     }, str(topologies / 'topology.toml'))
     (topologies / 'topology-playbook-pond.toml').write_text(PLAYBOOK_TOML)
 

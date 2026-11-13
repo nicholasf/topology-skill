@@ -19,11 +19,13 @@ TOPOLOGY = Topology.from_dict({
         {'name': 'pond', 'hostname': 'pond', 'os': 'linux', 'ssh': True},
         {'name': 'hut', 'hostname': 'hut', 'os': 'macOS'},
     ],
-    'backends': [
+    'llm_providers': [
         {'hostname': 'pond', 'name': 'ollama', 'status': 'up'},
     ],
     'llms': [
-        {'hostname': 'pond', 'backend': 'ollama', 'name': 'qwen3-coder:30b'},
+        {'hostname': 'pond', 'provider': 'ollama', 'name': 'qwen3-coder:30b'},
+    ],    'ggufs': [
+        {'hostname': 'pond', 'name': 'qwen-14b-q4.gguf', 'path': '/models/qwen-14b-q4.gguf'},
     ],
 })
 
@@ -103,6 +105,17 @@ def test_expand_llm_by_base_name():
     tag, kind, text = expand('qwen3-coder', TOPOLOGY, PLAYBOOKS)
     assert (tag, kind) == ('expanded', 'llm')
     assert 'LLM qwen3-coder:30b is on pond' in text
+
+
+def test_expand_gguf_by_file_or_base_name():
+    for payload in ('qwen-14b-q4.gguf', 'qwen-14b-q4'):
+        tag, kind, text = expand(payload, TOPOLOGY, PLAYBOOKS)
+        assert (tag, kind) == ('expanded', 'gguf')
+        assert text == 'GGUF qwen-14b-q4.gguf is on pond (on disk at /models/qwen-14b-q4.gguf).'
+
+
+def test_expand_host_lists_its_gguf_files():
+    assert 'GGUF files: qwen-14b-q4.gguf.' in expand('pond', TOPOLOGY, PLAYBOOKS)[2]
 
 
 def test_expand_playbook_by_name_and_alias():
@@ -206,6 +219,7 @@ def test_completion_items_cover_hosts_llms_playbooks_and_aliases():
     values = {i['value']: i['description'] for i in completion_items(TOPOLOGY, PLAYBOOKS)}
     assert values['pond'] == 'host: linux, ssh'
     assert values['qwen3-coder:30b'] == 'llm on pond (ollama, up)'
+    assert values['qwen-14b-q4.gguf'] == 'gguf on pond (on disk)'
     assert values['start-pond-qwen'] == 'playbook: Start qwen on pond'
     assert values['wake+pond+up'] == 'alias of playbook start-pond-qwen'
 

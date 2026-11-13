@@ -3,7 +3,8 @@ from unittest.mock import MagicMock, patch
 
 from topology.discover import (
     build_agents,
-    build_backends,
+    build_ggufs,
+    build_llm_providers,
     build_llms,
     probe_llama_context_window,
     probe_ollama_context_window,
@@ -67,7 +68,7 @@ def test_probe_ollama_context_window_exception_returns_none():
         assert probe_ollama_context_window('gollum', 'qwen3-coder:30b') is None
 
 
-# ── build_backends / build_llms ──────────────────────────────────────────────
+# ── build_llm_providers / build_llms / build_ggufs ──────────────────────────
 
 SAMPLE_DISCOVERIES = {
     'pond': {
@@ -80,41 +81,50 @@ SAMPLE_DISCOVERIES = {
 }
 
 
-def test_build_backends_includes_context_window_for_up_backend():
-    backends = build_backends(SAMPLE_DISCOVERIES)
-    llama = next(b for b in backends if b.name == 'llama-server')
+def test_build_llm_providers_includes_context_window_for_up_provider():
+    providers = build_llm_providers(SAMPLE_DISCOVERIES)
+    llama = next(p for p in providers if p.name == 'llama-server')
     assert llama.context_window == 65536
     assert llama.status == 'up'
     assert llama.port == 9337
     assert llama.last_seen
 
 
-def test_build_backends_keeps_down_backend_without_context_window():
-    ollama = next(b for b in build_backends(SAMPLE_DISCOVERIES) if b.name == 'ollama')
+def test_build_llm_providers_keeps_down_provider_without_context_window():
+    ollama = next(p for p in build_llm_providers(SAMPLE_DISCOVERIES) if p.name == 'ollama')
     assert ollama.status == 'down'
     assert 'context_window' not in ollama.to_dict()
     assert 'last_seen' not in ollama.to_dict()
 
 
-def test_build_backends_and_llms_empty_discoveries():
-    assert build_backends({}) == []
+def test_builders_empty_discoveries():
+    assert build_llm_providers({}) == []
     assert build_llms({}) == []
+    assert build_ggufs({}) == []
 
 
-def test_build_llms_one_row_per_llm_on_up_backends_only():
+def test_build_llms_one_row_per_llm_on_up_providers_only():
     llms = build_llms(SAMPLE_DISCOVERIES)
     assert [l.to_dict() for l in llms] == [
-        {'hostname': 'pond', 'backend': 'llama-server', 'name': 'qwen3-coder-30b.gguf'},
+        {'hostname': 'pond', 'provider': 'llama-server', 'name': 'qwen3-coder-30b.gguf'},
     ]
 
 
-def test_ggufs_backend_and_llms_only_when_ggufs_not_none():
-    assert not any(b.name == 'ggufs' for b in build_backends(SAMPLE_DISCOVERIES))
-    discoveries = {'pond': {'models': SAMPLE_DISCOVERIES['pond']['models'], 'ggufs': ['a.gguf', 'b.gguf']}}
-    ggufs = next(b for b in build_backends(discoveries) if b.name == 'ggufs')
-    assert ggufs.status == 'installed'
-    assert ggufs.port is None
-    assert [l.name for l in build_llms(discoveries) if l.backend == 'ggufs'] == ['a.gguf', 'b.gguf']
+def test_ggufs_are_files_not_providers_or_llms():
+    discoveries = {'pond': {'models': SAMPLE_DISCOVERIES['pond']['models'],
+                            'ggufs': ['/home/me/.local/share/gguf/a.gguf', '/home/me/.local/share/gguf/b.gguf']}}
+    assert [p.name for p in build_llm_providers(discoveries)] == ['llama-server', 'ollama']
+    assert [l.name for l in build_llms(discoveries)] == ['qwen3-coder-30b.gguf']
+    ggufs = build_ggufs(discoveries)
+    assert [(g.hostname, g.name, g.path) for g in ggufs] == [
+        ('pond', 'a.gguf', '/home/me/.local/share/gguf/a.gguf'),
+        ('pond', 'b.gguf', '/home/me/.local/share/gguf/b.gguf'),
+    ]
+    assert all(g.last_seen for g in ggufs)
+
+
+def test_no_ggufs_when_host_not_reached_over_ssh():
+    assert build_ggufs(SAMPLE_DISCOVERIES) == []
 
 
 # ── build_agents ──────────────────────────────────────────────────────────────
@@ -191,6 +201,6 @@ def test_main_upgrades_v1_file_and_keeps_reasoning_buffer(tmp_path, monkeypatch)
     data = read_toml(str(path))
     assert data['schema_version'] == 2
     assert 'model_state' not in data and 'agent_state' not in data
-    assert [b['name'] for b in data['backends']] == ['llama-server', 'ollama']
-    assert data['llms'] == [{'hostname': 'pond', 'backend': 'ollama', 'name': 'qwen3:4b'}]
+    assert [p['name'] for p in data['llm_providers']] == ['llama-server', 'ollama']
+    assert data['llms'] == [{'hostname': 'pond', 'provider': 'ollama', 'name': 'qwen3:4b'}]
     assert data['agents'][0]['reasoning_buffer'] == 8000

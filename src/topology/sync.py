@@ -27,8 +27,9 @@ def backup(topology_path: str) -> None:
     shutil.copy2(topology_path, backup_path)
 
 
-def read_provider(data: dict) -> str:
-    return data.get('provider', 'tailscale').lower()
+def read_network(data: dict) -> str:
+    """Where the machine list comes from: tailscale (the default) or manual."""
+    return data.get('network', 'tailscale').lower()
 
 
 def merge(existing_machines: list[dict], discovered: list[dict], ip_key: str = 'tailscale_ip') -> tuple[list[dict], list[str]]:
@@ -73,7 +74,7 @@ def main():
     data = read_topology_data(topology_path)
     existing_machines = data.get('machines', [])
 
-    provider_name = read_provider(data)
+    provider_name = read_network(data)
     if provider_name == 'manual':
         machines = [
             {'hostname': r['hostname'], 'ip': r.get('local_ip', ''), 'os': r.get('os', '')}
